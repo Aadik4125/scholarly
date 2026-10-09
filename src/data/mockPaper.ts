@@ -1,0 +1,148 @@
+import type { Paper } from '../types'
+
+export const mockPaper: Paper = {
+  id: 'demo',
+  analysisMode: 'demo',
+  title: 'Predicting Student Dropout Using Machine Learning Techniques',
+  fileName: 'dropout-prediction-draft3.pdf',
+  uploadedAt: '2026-10-02T09:14:00Z',
+  pageCount: 28,
+  wordCount: 7840,
+  sections: [
+    { id: 'abstract', heading: 'Abstract', excerpt: 'This study proposes a Random Forest classifier to predict student dropout, achieving an accuracy of 94.2% on the held-out test set...' },
+    { id: 'intro', heading: '1. Introduction', excerpt: 'Student attrition remains a persistent challenge for higher education institutions worldwide...' },
+    { id: 'methods', heading: '3. Methodology', excerpt: 'We trained an XGBoost classifier with 200 estimators and a max depth of 6 on the preprocessed dataset of 4,200 student records...' },
+    { id: 'results', heading: '4. Results', excerpt: 'The final model achieved an accuracy of 91.7%, a precision of 0.89, and a recall of 0.86 on the test split...' },
+    { id: 'discussion', heading: '5. Discussion', excerpt: 'These results suggest that ensemble methods are well suited to modelling the non-linear factors contributing to dropout...' },
+    { id: 'conclusion', heading: '6. Conclusion', excerpt: 'Our Random Forest model demonstrates strong potential for early dropout warning systems...' },
+  ],
+  consistencyIssues: [
+    {
+      id: 'ci-1',
+      category: 'model',
+      severity: 'high',
+      title: 'Model identity differs between Methodology and Results/Conclusion',
+      explanation: 'The Methodology section describes training an XGBoost classifier, but the Abstract and Conclusion both refer to a Random Forest model as the final approach. This should be reconciled so the reported results clearly belong to one model.',
+      locations: [
+        { section: '3. Methodology', quote: 'We trained an XGBoost classifier with 200 estimators and a max depth of 6...' },
+        { section: 'Abstract', quote: 'This study proposes a Random Forest classifier to predict student dropout...' },
+      ],
+      status: 'open',
+    },
+    {
+      id: 'ci-2',
+      category: 'numbers',
+      severity: 'high',
+      title: 'Reported accuracy differs between Abstract and Results',
+      explanation: 'The Abstract reports 94.2% accuracy while the Results section reports 91.7% accuracy for what appears to be the same final model. One of these figures is likely outdated.',
+      locations: [
+        { section: 'Abstract', quote: '...achieving an accuracy of 94.2% on the held-out test set.' },
+        { section: '4. Results', quote: 'The final model achieved an accuracy of 91.7%, a precision of 0.89, and a recall of 0.86...' },
+      ],
+      status: 'open',
+    },
+    {
+      id: 'ci-3',
+      category: 'dataset',
+      severity: 'medium',
+      title: 'Dataset size differs between Methodology and Discussion',
+      explanation: 'The Methodology section states the dataset contains 4,200 student records, while the Discussion references "over 5,000 students." Confirm which figure reflects the final dataset used.',
+      locations: [
+        { section: '3. Methodology', quote: '...preprocessed dataset of 4,200 student records...' },
+        { section: '5. Discussion', quote: 'With data from over 5,000 students, our approach generalises well across cohorts.' },
+      ],
+      status: 'open',
+    },
+    {
+      id: 'ci-4',
+      category: 'abstract-vs-results',
+      severity: 'low',
+      title: 'Recall value mentioned in Abstract not repeated in Results',
+      explanation: 'The Abstract implies a recall figure was measured but the Results section only reports precision and recall without cross-referencing the Abstract\'s claim of "balanced precision and recall." Consider adding the explicit comparison for clarity.',
+      locations: [
+        { section: 'Abstract', quote: '...with balanced precision and recall across both classes.' },
+        { section: '4. Results', quote: '...a precision of 0.89, and a recall of 0.86 on the test split.' },
+      ],
+      status: 'open',
+    },
+  ],
+  writingSuggestions: [
+    {
+      id: 'ws-1',
+      section: '1. Introduction',
+      type: 'concision',
+      original: 'It is important to note that, in light of the fact that student attrition has a significant and considerable impact on institutional funding, this is a topic that is very much worthy of further study and investigation.',
+      suggested: 'Student attrition significantly affects institutional funding, making it a topic worth further investigation.',
+      reason: 'Removes redundant hedging phrases and filler without changing the claim or dropping any citation.',
+      status: 'pending',
+    },
+    {
+      id: 'ws-2',
+      section: '5. Discussion',
+      type: 'clarity',
+      original: 'The thing that the model is doing, basically, is kind of learning patterns that are not very easy to see from just looking at the raw data by itself.',
+      suggested: 'The model learns non-linear patterns that are not readily apparent in the raw data.',
+      reason: 'Replaces vague, colloquial phrasing with precise academic language while preserving the original meaning.',
+      status: 'pending',
+    },
+    {
+      id: 'ws-3',
+      section: '6. Conclusion',
+      type: 'tone',
+      original: 'We think our model is pretty good and could probably help schools a lot if they decide to use it.',
+      suggested: 'Our model demonstrates strong potential for institutional adoption as part of an early-warning system.',
+      reason: 'Raises register to match academic conventions and removes informal hedging ("pretty good", "probably").',
+      status: 'pending',
+    },
+  ],
+  similaritySources: [
+    {
+      id: 'sim-1',
+      title: 'Early Warning Systems for Student Attrition: A Comparative Study',
+      authors: 'Nguyen, T. & Patel, R. (2023)',
+      matchPercent: 6.1,
+      matchedExcerpt: 'Student attrition remains a persistent challenge for higher education institutions worldwide, with downstream effects on funding...',
+    },
+    {
+      id: 'sim-2',
+      title: 'Ensemble Methods in Educational Data Mining',
+      authors: 'Okafor, B. (2022)',
+      matchPercent: 3.4,
+      matchedExcerpt: 'Ensemble methods such as Random Forest and Gradient Boosting are well suited to modelling non-linear relationships in tabular data.',
+    },
+  ],
+  overallSimilarityPercent: 11.8,
+  citationGaps: [
+    { id: 'cg-1', section: '4. Results', claim: 'XGBoost consistently outperforms logistic regression on imbalanced educational datasets.' },
+    { id: 'cg-2', section: '5. Discussion', claim: 'Early intervention programs reduce dropout rates by up to 30% when paired with predictive alerts.' },
+  ],
+  noveltyPoints: [
+    {
+      id: 'nv-1',
+      type: 'distinctive',
+      text: 'Combines demographic, LMS engagement, and financial-aid features into a single feature set — most prior work in this space uses only one of these categories.',
+    },
+    {
+      id: 'nv-2',
+      type: 'overlap',
+      text: 'The core modelling approach (tree ensembles for dropout prediction) closely follows Okafor (2022) and several other papers in educational data mining; the novelty here is in feature combination, not model choice.',
+      source: 'Okafor, B. (2022) — Ensemble Methods in Educational Data Mining',
+    },
+    {
+      id: 'nv-3',
+      type: 'suggestion',
+      text: 'Reporting feature-importance analysis or an ablation study isolating the contribution of financial-aid features would strengthen the claim of a novel feature combination.',
+    },
+  ],
+  versions: [
+    { id: 'v1', label: 'Draft 1', uploadedAt: '2026-09-18T10:00:00Z', consistencyOpenCount: 7, writingAcceptedCount: 0, note: 'Initial upload' },
+    { id: 'v2', label: 'Draft 2', uploadedAt: '2026-09-26T14:30:00Z', consistencyOpenCount: 5, writingAcceptedCount: 4, note: 'Fixed dataset description, reworded intro' },
+    { id: 'v3', label: 'Draft 3 (current)', uploadedAt: '2026-10-02T09:14:00Z', consistencyOpenCount: 4, writingAcceptedCount: 4, note: 'Model/accuracy mismatch still unresolved' },
+  ],
+  suggestedQuestions: [
+    'What would a viva panel most likely challenge in my Methodology section?',
+    'Does my Conclusion follow from the results I actually report?',
+    'Which claims in my Discussion are not backed by a citation?',
+    'Explain the difference between the two accuracy figures I reported.',
+  ],
+}
