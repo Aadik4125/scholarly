@@ -39,6 +39,9 @@ export interface SimilaritySource {
   authors: string
   matchPercent: number
   matchedExcerpt: string
+  /** 'fulltext' = matchPercent of the passage's 5-word sequences appear in the source's full text.
+   *  'semantic' = the passage closely paraphrases the source's abstract. Absent on demo data. */
+  matchType?: 'fulltext' | 'semantic'
 }
 
 export interface CitationGap {
@@ -118,4 +121,7 @@ export interface Paper {
   /** True once the CORE.ac.uk external-corpus check actually ran (vs. not configured at all).
    *  Distinguishes "checked, found nothing" from "no provider connected". 'ai' mode only. */
   similarityCorpusChecked?: boolean
+  /** Set when OpenAlex/CORE searches failed on some or all passages (e.g. rate limits), so the
+   *  score covers fewer passages than intended — or none. 'ai' mode only. */
+  similarityWarning?: string | null
 }

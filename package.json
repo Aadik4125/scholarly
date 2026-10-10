@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -n server,client -c green,cyan \"npm:server\" \"npm:dev:client\"",
     "dev:client": "vite",
-    "server": "node server/index.js",
+    "server": "node --watch server/index.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

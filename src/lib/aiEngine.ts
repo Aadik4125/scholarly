@@ -20,6 +20,7 @@ interface AnalyzeResponse {
   similarityCorpusChecked: boolean
   overallSimilarityPercent: number
   similaritySources: Paper['similaritySources']
+  similarityWarning: string | null
 }
 
 /** Real analysis pipeline: extracts text client-side, then sends it to the backend
@@ -70,6 +71,7 @@ export async function analyzePaperWithAI(file: File, onStage?: (stage: number) =
     noveltyPoints: data.noveltyPoints,
     selfSimilarityMatches: data.selfSimilarityMatches,
     similarityCorpusChecked: data.similarityCorpusChecked,
+    similarityWarning: data.similarityWarning,
     versions: [
       {
         id: 'v1',

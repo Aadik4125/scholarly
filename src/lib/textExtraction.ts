@@ -3,6 +3,25 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
+// pdf.js's page.getTextContent() reads a ReadableStream with `for await`, but Safari doesn't
+// support async iteration of ReadableStream — every PDF upload failed there with "undefined is
+// not a function (near '...value of readableStream...')". Add the iterator where it's missing.
+const streamProto = ReadableStream.prototype as unknown as Record<symbol, unknown>
+if (!streamProto[Symbol.asyncIterator]) {
+  streamProto[Symbol.asyncIterator] = async function* <T>(this: ReadableStream<T>) {
+    const reader = this.getReader()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) return
+        yield value
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+}
+
 export interface ExtractedSection {
   heading: string
   text: string
@@ -146,9 +165,22 @@ async function extractFromDocx(file: File): Promise<ExtractedDocument> {
     paragraphBuffer = []
   }
 
+  // textContent on a <table> runs every cell together ("Random Forest0.63330.6153..."), which
+  // garbles the numbers the consistency check compares — so keep cells and rows separated.
+  const blockText = (node: Element) =>
+    node.tagName.toLowerCase() === 'table'
+      ? Array.from(node.querySelectorAll('tr'))
+          .map((row) =>
+            Array.from(row.querySelectorAll('td, th'))
+              .map((cell) => (cell.textContent || '').trim())
+              .join(' | '),
+          )
+          .join('\n')
+      : node.textContent || ''
+
   for (const node of Array.from(docEl.body.children)) {
     const tag = node.tagName.toLowerCase()
-    const text = (node.textContent || '').trim()
+    const text = blockText(node).trim()
     if (!text) continue
     if (/^h[1-3]$/.test(tag)) {
       flush()

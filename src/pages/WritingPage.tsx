@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, X, ArrowRight, Save, Download } from 'lucide-react'
+import { Check, X, ArrowRight, Save, Download, LocateFixed } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import StickyTag from '../components/StickyTag'
 import type { StickyColor } from '../components/StickyTag'
@@ -21,25 +21,26 @@ const typeColor: Record<WritingSuggestion['type'], StickyColor> = {
   tone: 'purple',
 }
 
-type DiffSegment = { type: 'plain'; text: string } | { type: 'diff'; original: string; suggested: string }
+type DocSegment = { type: 'plain'; text: string } | { type: 'mark'; suggestion: WritingSuggestion }
 
-/** Builds a read-through view of the document with each accepted suggestion shown inline as a
- *  red (removed) / green (added) pair, positioned against the immutable original text. Using
- *  the original as the base — rather than scanning the already-edited text — keeps multiple
- *  accepted suggestions correctly positioned regardless of the order they were accepted in,
+/** Builds a read-through view of the document with every non-rejected suggestion marked inline:
+ *  pending ones highlight the original text that would change, accepted ones show the new text.
+ *  Positions are found against the immutable original text — rather than the already-edited
+ *  text — so marks stay correctly placed regardless of the order suggestions were accepted in,
  *  since string positions would otherwise shift as earlier edits change the text's length. */
-function buildDiffSegments(fullText: string, acceptedSuggestions: WritingSuggestion[]): DiffSegment[] {
-  const located = acceptedSuggestions
+function buildDocSegments(fullText: string, suggestions: WritingSuggestion[]): DocSegment[] {
+  const located = suggestions
+    .filter((s) => s.status !== 'rejected')
     .map((s) => ({ s, index: fullText.indexOf(s.original) }))
     .filter((x) => x.index !== -1)
     .sort((a, b) => a.index - b.index)
 
-  const segments: DiffSegment[] = []
+  const segments: DocSegment[] = []
   let cursor = 0
   for (const { s, index } of located) {
-    if (index < cursor) continue // overlaps an already-placed edit — skip rather than double-render
+    if (index < cursor) continue // overlaps an already-placed mark — skip rather than double-render
     if (index > cursor) segments.push({ type: 'plain', text: fullText.slice(cursor, index) })
-    segments.push({ type: 'diff', original: s.original, suggested: s.suggested })
+    segments.push({ type: 'mark', suggestion: s })
     cursor = index + s.original.length
   }
   if (cursor < fullText.length) segments.push({ type: 'plain', text: fullText.slice(cursor) })
@@ -51,6 +52,9 @@ export default function WritingPage() {
   const { push } = useToast()
   const [savedAcceptedCount, setSavedAcceptedCount] = useState(0)
   const [isSaving, setIsSaving] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const docCardRef = useRef<HTMLDivElement>(null)
+  const docScrollRef = useRef<HTMLDivElement>(null)
 
   if (!paper) return null
   const suggestions = paper.writingSuggestions
@@ -64,7 +68,23 @@ export default function WritingPage() {
   const pending = suggestions.filter((s) => s.status === 'pending')
   const accepted = suggestions.filter((s) => s.status === 'accepted')
   const hasUnsavedChanges = accepted.length > savedAcceptedCount
-  const diffSegments = paper.fullText ? buildDiffSegments(paper.fullText, accepted) : []
+  const docSegments = paper.fullText ? buildDocSegments(paper.fullText, suggestions) : []
+  const markedIds = new Set(docSegments.flatMap((seg) => (seg.type === 'mark' ? [seg.suggestion.id] : [])))
+
+  /** Brings the document pane into view and scrolls inside it to the suggestion's mark. */
+  const locateInDocument = (id: string) => {
+    setActiveId(id)
+    docCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    const container = docScrollRef.current
+    const mark = document.getElementById(`mark-${id}`)
+    if (container && mark) container.scrollTo({ top: mark.offsetTop - container.clientHeight / 3, behavior: 'smooth' })
+  }
+
+  /** Scrolls the page to the suggestion card behind a clicked mark. */
+  const locateCard = (id: string) => {
+    setActiveId(id)
+    document.getElementById(`suggestion-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
 
   const handleSave = async () => {
     setIsSaving(true)
@@ -114,7 +134,7 @@ export default function WritingPage() {
       </p>
 
       {isEditable && paper.editedText && (
-        <div className="ink-border card-pop mb-6 overflow-hidden rounded-3xl bg-surface shadow-[var(--shadow-card)]">
+        <div ref={docCardRef} className="ink-border card-pop mb-6 scroll-mt-28 overflow-hidden rounded-3xl bg-surface shadow-[var(--shadow-card)]">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b-[1.5px] border-line px-5 py-4">
             <div>
               <h2 className="font-display text-lg tracking-wide text-ink uppercase">Your edited document</h2>
@@ -125,6 +145,14 @@ export default function WritingPage() {
                     ? `${accepted.length - savedAcceptedCount} change(s) not yet saved to version history.`
                     : 'All accepted changes are saved.'}
               </p>
+              <div className="mt-2 flex flex-wrap gap-3 text-xs text-ink-muted">
+                <span className="flex items-center gap-1.5">
+                  <span className="h-3 w-3 rounded-sm bg-highlight" /> To be changed
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="h-3 w-3 rounded-sm bg-sticky-green" /> Changed
+                </span>
+              </div>
             </div>
             <div className="flex gap-2">
               <button
@@ -151,17 +179,28 @@ export default function WritingPage() {
               </button>
             </div>
           </div>
-          <div className="h-64 overflow-y-auto bg-paper px-5 py-4 text-sm leading-relaxed whitespace-pre-wrap text-ink-2">
-            {diffSegments.map((seg, i) =>
-              seg.type === 'plain' ? (
-                <span key={i}>{seg.text}</span>
-              ) : (
-                <span key={i}>
-                  <del className="rounded bg-red-50 text-red-600 decoration-red-500 decoration-2">{seg.original}</del>{' '}
-                  <ins className="rounded bg-emerald-50 font-semibold text-emerald-700 no-underline">{seg.suggested}</ins>
-                </span>
-              ),
-            )}
+          <div
+            ref={docScrollRef}
+            className="relative h-64 overflow-y-auto bg-paper px-5 py-4 text-sm leading-relaxed whitespace-pre-wrap text-ink-2"
+          >
+            {docSegments.map((seg, i) => {
+              if (seg.type === 'plain') return <span key={i}>{seg.text}</span>
+              const s = seg.suggestion
+              const isAccepted = s.status === 'accepted'
+              return (
+                <mark
+                  key={s.id}
+                  id={`mark-${s.id}`}
+                  onClick={() => locateCard(s.id)}
+                  title={isAccepted ? `Changed from: "${s.original}"` : `Suggested: "${s.suggested}"`}
+                  className={`cursor-pointer rounded px-0.5 text-ink-on-sticky transition-shadow ${
+                    isAccepted ? 'bg-sticky-green' : 'bg-highlight'
+                  } ${activeId === s.id ? 'ring-2 ring-ink' : ''}`}
+                >
+                  {isAccepted ? s.suggested : s.original}
+                </mark>
+              )
+            })}
           </div>
         </div>
       )}
@@ -180,10 +219,13 @@ export default function WritingPage() {
             <motion.div
               layout
               key={s.id}
+              id={`suggestion-${s.id}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="ink-border card-pop rounded-3xl bg-surface p-5 shadow-[var(--shadow-card)]"
+              className={`ink-border card-pop scroll-mt-28 rounded-3xl bg-surface p-5 shadow-[var(--shadow-card)] ${
+                activeId === s.id ? 'ring-2 ring-ink ring-offset-2 ring-offset-paper' : ''
+              }`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex flex-wrap items-center gap-2">
@@ -200,26 +242,38 @@ export default function WritingPage() {
                     </span>
                   )}
                 </div>
-                {s.status === 'pending' && (
-                  <div className="flex shrink-0 gap-2">
+                <div className="flex shrink-0 gap-2">
+                  {isEditable && markedIds.has(s.id) && (
                     <motion.button
                       whileTap={{ scale: 0.9 }}
-                      onClick={() => setStatus(s.id, 'accepted')}
-                      title="Accept"
-                      className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-sticky-green text-ink-on-sticky"
-                    >
-                      <Check size={16} />
-                    </motion.button>
-                    <motion.button
-                      whileTap={{ scale: 0.9 }}
-                      onClick={() => setStatus(s.id, 'rejected')}
-                      title="Reject"
+                      onClick={() => locateInDocument(s.id)}
+                      title="Show in document"
                       className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-surface text-ink-muted hover:bg-surface-hover"
                     >
-                      <X size={16} />
+                      <LocateFixed size={16} />
                     </motion.button>
-                  </div>
-                )}
+                  )}
+                  {s.status === 'pending' && (
+                    <>
+                      <motion.button
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => setStatus(s.id, 'accepted')}
+                        title="Accept"
+                        className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-sticky-green text-ink-on-sticky"
+                      >
+                        <Check size={16} />
+                      </motion.button>
+                      <motion.button
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => setStatus(s.id, 'rejected')}
+                        title="Reject"
+                        className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-surface text-ink-muted hover:bg-surface-hover"
+                      >
+                        <X size={16} />
+                      </motion.button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-stretch">

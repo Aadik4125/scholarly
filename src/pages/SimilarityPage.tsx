@@ -21,6 +21,16 @@ export default function SimilarityPage() {
         description="Provider-abstracted and swappable — not the primary differentiator of this product."
       />
 
+      {paper.analysisMode === 'ai' && paper.similarityWarning && (
+        <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-yellow px-5 py-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
+          <p className="text-sm text-ink-on-sticky">
+            <span className="font-bold">{corpusChecked ? 'Similarity check incomplete. ' : 'Similarity check failed. '}</span>
+            {paper.similarityWarning} Fix the issue and re-analyze the paper for a full score.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {!showScore ? (
           <motion.div
@@ -31,9 +41,13 @@ export default function SimilarityPage() {
             <span className="ink-border flex h-10 w-10 items-center justify-center rounded-full bg-white text-ink-muted">
               <PlugZap size={18} />
             </span>
-            <p className="mt-2 text-sm font-bold text-ink">No similarity provider connected</p>
+            <p className="mt-2 text-sm font-bold text-ink">
+              {paper.similarityWarning ? 'Similarity sources unreachable' : 'No similarity provider connected'}
+            </p>
             <p className="text-xs text-ink-muted">
-              {paper.analysisMode === 'ai'
+              {paper.similarityWarning
+                ? 'Every search to OpenAlex and CORE failed, so no score was calculated — see the note above.'
+                : paper.analysisMode === 'ai'
                 ? 'The external similarity check needs OPENAI_API_KEY set in the backend .env — add it and re-analyze.'
                 : "This runs entirely in your browser, with no corpus to check against. A similarity score requires a licensed provider or a cross-document corpus — this demo doesn't fabricate one."}
             </p>
@@ -67,8 +81,17 @@ export default function SimilarityPage() {
                     <p className="text-sm font-bold text-ink">{s.title}</p>
                     <p className="text-xs text-ink-muted">{s.authors}</p>
                   </div>
-                  <span className="ink-border shrink-0 rounded-full bg-sticky-blue px-2.5 py-1 text-xs font-bold text-ink-on-sticky">
-                    {s.matchPercent}% match
+                  <span
+                    title={
+                      s.matchType === 'fulltext'
+                        ? 'Share of this passage’s wording found word-for-word in the source’s full text'
+                        : 'Closeness of this passage to the source’s abstract'
+                    }
+                    className={`ink-border shrink-0 rounded-full px-2.5 py-1 text-xs font-bold text-ink-on-sticky ${
+                      s.matchType === 'fulltext' ? 'bg-sticky-pink' : 'bg-sticky-blue'
+                    }`}
+                  >
+                    {s.matchType === 'fulltext' ? `${s.matchPercent}% text overlap` : `${s.matchPercent}% match`}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
@@ -76,7 +99,11 @@ export default function SimilarityPage() {
             ))}
             {paper.similaritySources.length === 0 && (
               <p className="px-5 py-8 text-center text-sm text-ink-muted">
-                {corpusChecked ? 'No matching sources found across OpenAlex or CORE.' : 'No similarity provider connected.'}
+                {corpusChecked
+                  ? 'No matching sources found across OpenAlex or CORE.'
+                  : paper.similarityWarning
+                    ? 'No sources could be searched.'
+                    : 'No similarity provider connected.'}
               </p>
             )}
           </div>

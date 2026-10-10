@@ -100,10 +100,20 @@ export default function OverviewPage() {
                 <Fingerprint size={18} />
               </div>
               <p className="mt-4 font-display text-2xl leading-none text-ink-muted">Not available</p>
-              <p className="mt-2 text-sm font-semibold text-ink-muted">Similarity needs a corpus provider</p>
+              <p className="mt-2 text-sm font-semibold text-ink-muted">
+                {paper.similarityWarning ? 'Sources unreachable — see Similarity' : 'Similarity needs a corpus provider'}
+              </p>
             </div>
           ) : (
-            <StatCard icon={Fingerprint} label="Overall similarity" value={paper.overallSimilarityPercent} suffix="%" decimals={1} tone="blue" rotate={-1} />
+            <StatCard
+              icon={Fingerprint}
+              label={paper.similarityWarning ? 'Overall similarity (incomplete check)' : 'Overall similarity'}
+              value={paper.overallSimilarityPercent}
+              suffix="%"
+              decimals={1}
+              tone="blue"
+              rotate={-1}
+            />
           )}
           <StatCard icon={Sparkles} label="Citation gaps" value={paper.citationGaps.length} tone="purple" rotate={1.5} />
         </motion.div>
