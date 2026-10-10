@@ -17,11 +17,16 @@ interface AnalyzeResponse {
   noveltyPoints: Paper['noveltyPoints']
   suggestedQuestions: string[]
   selfSimilarityMatches: Paper['selfSimilarityMatches']
+  similarityCorpusChecked: boolean
+  overallSimilarityPercent: number
+  similaritySources: Paper['similaritySources']
 }
 
 /** Real analysis pipeline: extracts text client-side, then sends it to the backend
  *  (/api/analyze) where Claude finds contradictions and novelty, Claude Haiku checks
- *  writing and citations, and OpenAI embeddings flag internal near-duplicate passages. */
+ *  writing and citations, OpenAI embeddings flag internal near-duplicate passages, and
+ *  (if CORE_API_KEY is configured) passages are checked against the CORE.ac.uk open-access
+ *  research corpus for external similarity. */
 export async function analyzePaperWithAI(file: File, onStage?: (stage: number) => void): Promise<Paper> {
   onStage?.(0)
   const extracted = await extractDocument(file)
@@ -60,10 +65,11 @@ export async function analyzePaperWithAI(file: File, onStage?: (stage: number) =
     consistencyIssues: data.consistencyIssues,
     writingSuggestions: data.writingSuggestions,
     citationGaps: data.citationGaps,
-    similaritySources: [],
-    overallSimilarityPercent: 0,
+    similaritySources: data.similaritySources ?? [],
+    overallSimilarityPercent: data.overallSimilarityPercent ?? 0,
     noveltyPoints: data.noveltyPoints,
     selfSimilarityMatches: data.selfSimilarityMatches,
+    similarityCorpusChecked: data.similarityCorpusChecked,
     versions: [
       {
         id: 'v1',
@@ -79,6 +85,7 @@ export async function analyzePaperWithAI(file: File, onStage?: (stage: number) =
         ? data.suggestedQuestions
         : ['Summarize what this paper argues in plain language.', 'What would a viva panel most likely challenge?'],
     fullText: extracted.fullText,
+    editedText: extracted.fullText,
     fileSizeBytes: file.size,
   }
 }

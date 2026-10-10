@@ -9,7 +9,8 @@ export default function SimilarityPage() {
   const { paper } = useCurrentPaper()
   if (!paper) return null
 
-  const noCorpus = paper.analysisMode !== 'demo'
+  const corpusChecked = paper.analysisMode === 'ai' && paper.similarityCorpusChecked === true
+  const showScore = paper.analysisMode === 'demo' || corpusChecked
   const score = paper.overallSimilarityPercent
 
   return (
@@ -21,7 +22,7 @@ export default function SimilarityPage() {
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {noCorpus ? (
+        {!showScore ? (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -32,8 +33,9 @@ export default function SimilarityPage() {
             </span>
             <p className="mt-2 text-sm font-bold text-ink">No similarity provider connected</p>
             <p className="text-xs text-ink-muted">
-              This runs entirely in your browser, with no corpus to check against. A similarity score requires a
-              licensed provider or a cross-document corpus — this demo doesn't fabricate one.
+              {paper.analysisMode === 'ai'
+                ? 'The external similarity check needs OPENAI_API_KEY set in the backend .env — add it and re-analyze.'
+                : "This runs entirely in your browser, with no corpus to check against. A similarity score requires a licensed provider or a cross-document corpus — this demo doesn't fabricate one."}
             </p>
           </motion.div>
         ) : (
@@ -73,7 +75,9 @@ export default function SimilarityPage() {
               </div>
             ))}
             {paper.similaritySources.length === 0 && (
-              <p className="px-5 py-8 text-center text-sm text-ink-muted">No similarity provider connected.</p>
+              <p className="px-5 py-8 text-center text-sm text-ink-muted">
+                {corpusChecked ? 'No matching sources found across OpenAlex or CORE.' : 'No similarity provider connected.'}
+              </p>
             )}
           </div>
         </div>
@@ -110,8 +114,8 @@ export default function SimilarityPage() {
             <h2 className="font-display text-lg tracking-wide text-ink uppercase">Internal repetition check</h2>
           </div>
           <p className="px-5 pt-4 text-xs text-ink-muted">
-            There's no external corpus here — this checks the document against itself, via embeddings, for
-            passages that are suspiciously close to each other in different sections.
+            This checks the document against itself, via embeddings, for passages that are suspiciously close to
+            each other in different sections — separate from the external corpus check above.
           </p>
           <div className="divide-y-[1.5px] divide-line">
             {(paper.selfSimilarityMatches ?? []).map((m) => (

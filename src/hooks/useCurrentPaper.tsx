@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { mockPaper } from '../data/mockPaper'
-import { getPaper, getPaperBlob, updateConsistencyStatus, updateWritingStatus } from '../lib/paperDb'
+import { getPaper, getPaperBlob, updateConsistencyStatus, updateWritingStatus, saveEditedVersion } from '../lib/paperDb'
 import type { ConsistencyIssue, Paper, WritingSuggestion } from '../types'
 
 interface CurrentPaperContextValue {
@@ -10,6 +10,9 @@ interface CurrentPaperContextValue {
   notFound: boolean
   setConsistencyStatus: (issueId: string, status: ConsistencyIssue['status']) => void
   setWritingStatus: (suggestionId: string, status: WritingSuggestion['status']) => void
+  /** Snapshots the current edited text as a new draft in version history. Returns false for
+   *  the demo paper or when there's nothing accepted yet to save. */
+  saveNewVersion: () => Promise<boolean>
 }
 
 const CurrentPaperContext = createContext<CurrentPaperContextValue | null>(null)
@@ -89,21 +92,44 @@ export function CurrentPaperProvider({ paperId, children }: { paperId: string; c
 
   const setWritingStatus = useCallback(
     (suggestionId: string, status: WritingSuggestion['status']) => {
+      const suggestion = paper?.writingSuggestions.find((s) => s.id === suggestionId)
+      let nextEditedText = paper?.editedText
+      if (status === 'accepted' && suggestion && paper?.analysisMode === 'ai' && nextEditedText?.includes(suggestion.original)) {
+        nextEditedText = nextEditedText.replace(suggestion.original, suggestion.suggested)
+      }
+
       setPaper((prev) =>
         prev
           ? {
               ...prev,
               writingSuggestions: prev.writingSuggestions.map((s) => (s.id === suggestionId ? { ...s, status } : s)),
+              editedText: nextEditedText,
             }
           : prev,
       )
-      if (paperId !== 'demo') void updateWritingStatus(paperId, suggestionId, status)
+
+      if (paperId !== 'demo') {
+        const textChanged = nextEditedText !== undefined && nextEditedText !== paper?.editedText
+        void updateWritingStatus(paperId, suggestionId, status, textChanged ? nextEditedText : undefined)
+      }
     },
-    [paperId],
+    [paperId, paper],
   )
 
+  const saveNewVersion = useCallback(async () => {
+    if (paperId === 'demo' || !paper || !paper.editedText) return false
+    const acceptedCount = paper.writingSuggestions.filter((s) => s.status === 'accepted').length
+    if (acceptedCount === 0) return false
+    await saveEditedVersion(paperId, `Applied ${acceptedCount} writing suggestion${acceptedCount === 1 ? '' : 's'}`)
+    const refreshed = await getPaper(paperId)
+    if (refreshed) setPaper(refreshed)
+    return true
+  }, [paperId, paper])
+
   return (
-    <CurrentPaperContext.Provider value={{ paper, blobUrl, loading, notFound, setConsistencyStatus, setWritingStatus }}>
+    <CurrentPaperContext.Provider
+      value={{ paper, blobUrl, loading, notFound, setConsistencyStatus, setWritingStatus, saveNewVersion }}
+    >
       {children}
     </CurrentPaperContext.Provider>
   )

@@ -116,15 +116,45 @@ export async function updateConsistencyStatus(
   await db.put('papers', record)
 }
 
+/** Updates a suggestion's status and (when accepting one changes the working text) editedText
+ *  in a single read-modify-write. These must stay atomic: firing them as two separate
+ *  get+put calls lets the second overwrite the first's change if their transactions interleave,
+ *  silently losing the status flip or the text edit depending on which one lands last. */
 export async function updateWritingStatus(
   paperId: string,
   suggestionId: string,
   status: 'pending' | 'accepted' | 'rejected',
+  editedText?: string,
 ): Promise<void> {
   const db = await getDb()
   const record = await db.get('papers', paperId)
   if (!record) return
   record.writingSuggestions = record.writingSuggestions.map((s) => (s.id === suggestionId ? { ...s, status } : s))
+  if (editedText !== undefined) record.editedText = editedText
+  await db.put('papers', record)
+}
+
+/** Snapshots the current editedText as a new draft in version history — the "Save new version"
+ *  action on the Writing page, separate from re-uploading a file. Mirrors savePaper's
+ *  version-bumping logic but doesn't touch the stored file or re-run analysis. */
+export async function saveEditedVersion(paperId: string, note: string): Promise<void> {
+  const db = await getDb()
+  const record = await db.get('papers', paperId)
+  if (!record) return
+
+  const priorVersions = record.versions.map((v, i) => ({
+    ...v,
+    label: v.label.replace(' (current)', '') || `Draft ${i + 1}`,
+  }))
+  const newVersion = {
+    id: `v${priorVersions.length + 1}`,
+    label: `Draft ${priorVersions.length + 1} (current)`,
+    uploadedAt: new Date().toISOString(),
+    consistencyOpenCount: record.consistencyIssues.filter((i) => i.status === 'open').length,
+    writingAcceptedCount: record.writingSuggestions.filter((s) => s.status === 'accepted').length,
+    note,
+  }
+  record.versions = [...priorVersions, newVersion]
   await db.put('papers', record)
 }
 

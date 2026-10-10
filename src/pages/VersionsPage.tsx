@@ -26,8 +26,8 @@ export default function VersionsPage() {
         </div>
       ) : (
         <div className="ink-border card-pop mb-6 rounded-3xl bg-surface-hover p-5 text-sm text-ink-muted shadow-[var(--shadow-card)]">
-          Only one draft so far. Re-upload a file with the same name from the home screen to add a new draft and
-          start tracking a real trend here.
+          Only one draft so far. Accept some writing suggestions and save a new version from the Writing tab, or
+          re-upload a file with the same name from the home screen, to start tracking a real trend here.
         </div>
       )}
 

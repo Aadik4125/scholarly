@@ -1,10 +1,12 @@
+import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, X, ArrowRight } from 'lucide-react'
+import { Check, X, ArrowRight, Save, Download } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import StickyTag from '../components/StickyTag'
 import type { StickyColor } from '../components/StickyTag'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
 import { useToast } from '../hooks/useToast'
+import { exportPaperAsDocx } from '../lib/exportDocx'
 import type { WritingSuggestion } from '../types'
 
 const typeLabels: Record<WritingSuggestion['type'], string> = {
@@ -19,12 +21,40 @@ const typeColor: Record<WritingSuggestion['type'], StickyColor> = {
   tone: 'purple',
 }
 
+type DiffSegment = { type: 'plain'; text: string } | { type: 'diff'; original: string; suggested: string }
+
+/** Builds a read-through view of the document with each accepted suggestion shown inline as a
+ *  red (removed) / green (added) pair, positioned against the immutable original text. Using
+ *  the original as the base — rather than scanning the already-edited text — keeps multiple
+ *  accepted suggestions correctly positioned regardless of the order they were accepted in,
+ *  since string positions would otherwise shift as earlier edits change the text's length. */
+function buildDiffSegments(fullText: string, acceptedSuggestions: WritingSuggestion[]): DiffSegment[] {
+  const located = acceptedSuggestions
+    .map((s) => ({ s, index: fullText.indexOf(s.original) }))
+    .filter((x) => x.index !== -1)
+    .sort((a, b) => a.index - b.index)
+
+  const segments: DiffSegment[] = []
+  let cursor = 0
+  for (const { s, index } of located) {
+    if (index < cursor) continue // overlaps an already-placed edit — skip rather than double-render
+    if (index > cursor) segments.push({ type: 'plain', text: fullText.slice(cursor, index) })
+    segments.push({ type: 'diff', original: s.original, suggested: s.suggested })
+    cursor = index + s.original.length
+  }
+  if (cursor < fullText.length) segments.push({ type: 'plain', text: fullText.slice(cursor) })
+  return segments
+}
+
 export default function WritingPage() {
-  const { paper, setWritingStatus } = useCurrentPaper()
+  const { paper, setWritingStatus, saveNewVersion } = useCurrentPaper()
   const { push } = useToast()
+  const [savedAcceptedCount, setSavedAcceptedCount] = useState(0)
+  const [isSaving, setIsSaving] = useState(false)
 
   if (!paper) return null
   const suggestions = paper.writingSuggestions
+  const isEditable = paper.analysisMode === 'ai'
 
   const setStatus = (id: string, status: WritingSuggestion['status']) => {
     setWritingStatus(id, status)
@@ -33,6 +63,39 @@ export default function WritingPage() {
 
   const pending = suggestions.filter((s) => s.status === 'pending')
   const accepted = suggestions.filter((s) => s.status === 'accepted')
+  const hasUnsavedChanges = accepted.length > savedAcceptedCount
+  const diffSegments = paper.fullText ? buildDiffSegments(paper.fullText, accepted) : []
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    const saved = await saveNewVersion()
+    setIsSaving(false)
+    if (saved) {
+      setSavedAcceptedCount(accepted.length)
+      push('New draft saved — see it in Version History', 'success')
+    } else {
+      push('Accept at least one suggestion before saving a new draft', 'neutral')
+    }
+  }
+
+  const handleDownloadTxt = () => {
+    if (!paper.editedText) return
+    const blob = new Blob([paper.editedText], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${paper.title.replace(/\s+/g, '_')}_edited.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadDocx = async () => {
+    try {
+      await exportPaperAsDocx(paper)
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Could not generate the .docx file', 'neutral')
+    }
+  }
 
   return (
     <div>
@@ -49,6 +112,59 @@ export default function WritingPage() {
       <p className="mb-4 inline-block w-fit font-hand text-xl text-ink-2" style={{ transform: 'rotate(-1deg)' }}>
         {pending.length} pending · {accepted.length} accepted
       </p>
+
+      {isEditable && paper.editedText && (
+        <div className="ink-border card-pop mb-6 overflow-hidden rounded-3xl bg-surface shadow-[var(--shadow-card)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b-[1.5px] border-line px-5 py-4">
+            <div>
+              <h2 className="font-display text-lg tracking-wide text-ink uppercase">Your edited document</h2>
+              <p className="text-xs text-ink-muted">
+                {accepted.length === 0
+                  ? 'Accept a suggestion below to start editing the text.'
+                  : hasUnsavedChanges
+                    ? `${accepted.length - savedAcceptedCount} change(s) not yet saved to version history.`
+                    : 'All accepted changes are saved.'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDownloadTxt}
+                className="ink-border flex items-center gap-1.5 rounded-full bg-surface-raised px-3.5 py-1.5 text-xs font-bold text-ink hover:bg-surface-hover"
+              >
+                <Download size={12} />
+                .txt
+              </button>
+              <button
+                onClick={handleDownloadDocx}
+                className="ink-border flex items-center gap-1.5 rounded-full bg-surface-raised px-3.5 py-1.5 text-xs font-bold text-ink hover:bg-surface-hover"
+              >
+                <Download size={12} />
+                .docx
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!hasUnsavedChanges || isSaving}
+                className="ink-border flex items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-paper disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Save size={12} />
+                {isSaving ? 'Saving...' : 'Save new version'}
+              </button>
+            </div>
+          </div>
+          <div className="h-64 overflow-y-auto bg-paper px-5 py-4 text-sm leading-relaxed whitespace-pre-wrap text-ink-2">
+            {diffSegments.map((seg, i) =>
+              seg.type === 'plain' ? (
+                <span key={i}>{seg.text}</span>
+              ) : (
+                <span key={i}>
+                  <del className="rounded bg-red-50 text-red-600 decoration-red-500 decoration-2">{seg.original}</del>{' '}
+                  <ins className="rounded bg-emerald-50 font-semibold text-emerald-700 no-underline">{seg.suggested}</ins>
+                </span>
+              ),
+            )}
+          </div>
+        </div>
+      )}
 
       {suggestions.length === 0 && (
         <div className="ink-border rounded-3xl border-dashed bg-surface p-10 text-center text-sm font-semibold text-ink-muted">

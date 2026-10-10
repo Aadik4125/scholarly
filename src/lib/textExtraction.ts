@@ -133,28 +133,35 @@ async function extractFromDocx(file: File): Promise<ExtractedDocument> {
   const parser = new DOMParser()
   const docEl = parser.parseFromString(html, 'text/html')
   const sections: ExtractedSection[] = []
+  // Unlike PDF line-wrapping (where we can't tell a real paragraph break from a wrapped line),
+  // each DOCX <p>/<hN> here is a genuine block from mammoth's HTML — so these joins use real
+  // paragraph breaks instead of flattening everything into one run-on line.
+  const fullTextBlocks: string[] = []
   let currentHeading = 'Start of document'
   let paragraphBuffer: string[] = []
 
   const flush = () => {
-    const text = paragraphBuffer.join(' ').replace(/\s+/g, ' ').trim()
+    const text = paragraphBuffer.join('\n\n').trim()
     if (text) sections.push({ heading: currentHeading, text })
     paragraphBuffer = []
   }
 
   for (const node of Array.from(docEl.body.children)) {
     const tag = node.tagName.toLowerCase()
-    const text = node.textContent || ''
+    const text = (node.textContent || '').trim()
+    if (!text) continue
     if (/^h[1-3]$/.test(tag)) {
       flush()
-      currentHeading = text.trim() || currentHeading
-    } else if (text.trim()) {
-      paragraphBuffer.push(text.trim())
+      currentHeading = text
+      fullTextBlocks.push(text)
+    } else {
+      paragraphBuffer.push(text)
+      fullTextBlocks.push(text)
     }
   }
   flush()
 
-  const fullText = docEl.body.textContent || ''
+  const fullText = fullTextBlocks.join('\n\n')
   const wordCount = fullText.trim().split(/\s+/).filter(Boolean).length
   const pageCount = Math.max(1, Math.round(wordCount / 500))
 

@@ -32,7 +32,8 @@ export default function OverviewPage() {
   if (!paper) return null
 
   const isHeuristic = paper.analysisMode === 'heuristic'
-  const noSimilarityCorpus = paper.analysisMode !== 'demo'
+  const corpusChecked = paper.analysisMode === 'ai' && paper.similarityCorpusChecked === true
+  const noSimilarityCorpus = paper.analysisMode !== 'demo' && !corpusChecked
   const openIssues = paper.consistencyIssues.filter((i) => i.status === 'open')
   const highSeverity = openIssues.filter((i) => i.severity === 'high').length
   const pendingWriting = paper.writingSuggestions.filter((s) => s.status === 'pending').length

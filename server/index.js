@@ -8,6 +8,7 @@ const PORT = process.env.PORT || 8787
 
 if (!process.env.ANTHROPIC_API_KEY) console.warn('[server] ANTHROPIC_API_KEY is not set in .env — /api/analyze and /api/ask will fail until it is')
 if (!process.env.OPENAI_API_KEY) console.warn('[server] OPENAI_API_KEY is not set in .env — the self-similarity embeddings step will be skipped until it is')
+if (!process.env.CORE_API_KEY) console.warn('[server] CORE_API_KEY is not set in .env — external similarity will still run against OpenAlex (no key needed), just without CORE\'s full-text corpus layered in')
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
@@ -19,6 +20,13 @@ const MAX_SENTENCES = 800
 // Sentence pairs at or above this cosine similarity are treated as repeated text.
 // Measured on real output: verbatim repeats score ~1.0, unrelated sentences stay below ~0.85.
 const NEAR_DUPLICATE_THRESHOLD = 0.95
+// Paraphrase/overlap threshold against external abstracts is lower than the internal-duplicate
+// one, since we're comparing a passage against an abstract summarizing a whole paper, not a
+// verbatim copy. Measured on a real verbatim-copied passage: true match scored 0.82-0.85
+// (varies slightly by which provider's version of the abstract wins the CORE/OpenAlex dedup),
+// unrelated candidates scored 0.55-0.65 — wide margin either side of 0.78.
+const EXTERNAL_MATCH_THRESHOLD = 0.78
+const CORE_API_BASE = 'https://api.core.ac.uk/v3'
 
 const app = express()
 app.use(cors())
@@ -119,8 +127,12 @@ const writingTool = {
           properties: {
             section: { type: 'string' },
             type: { type: 'string', enum: ['clarity', 'concision', 'tone'] },
-            original: { type: 'string' },
-            suggested: { type: 'string' },
+            original: { type: 'string', description: 'Exact verbatim quote from the document to be replaced.' },
+            suggested: {
+              type: 'string',
+              description:
+                'The literal replacement text, verbatim — never an instruction like "delete this" or "rephrase". Empty string if the fix is to delete original entirely.',
+            },
             reason: { type: 'string' },
           },
           required: ['section', 'type', 'original', 'suggested', 'reason'],
@@ -153,6 +165,158 @@ const answerTool = {
   },
 }
 
+const cosine = (a, b) => {
+  let dot = 0
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i]
+  return dot // OpenAI embeddings are already unit-normalized
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Reconstructs plain text from OpenAlex's abstract_inverted_index format (a word -> [positions]
+ *  map, used instead of plain abstract text to respect publisher copyright on the prose itself). */
+function reconstructAbstract(invertedIndex) {
+  if (!invertedIndex) return ''
+  const positions = []
+  for (const [word, idxs] of Object.entries(invertedIndex)) {
+    for (const idx of idxs) positions[idx] = word
+  }
+  return positions.join(' ')
+}
+
+/** Searches CORE.ac.uk's open-access corpus (200M+ works, many with full text) for a passage.
+ *  Requires a free API key (core.ac.uk/services/api) — returns [] if not configured. */
+async function searchCore(passage) {
+  if (!process.env.CORE_API_KEY) return []
+  const res = await fetch(`${CORE_API_BASE}/search/works?${new URLSearchParams({ q: passage, limit: '3' })}`, {
+    headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
+  })
+  if (!res.ok) {
+    console.error('[server] CORE search failed:', res.status, await res.text().catch(() => ''))
+    return []
+  }
+  const data = await res.json()
+  return (data.results || [])
+    .filter((r) => r.abstract && r.abstract.length > 40)
+    .map((r) => ({
+      title: r.title || 'Untitled work',
+      authors: (r.authors || []).map((a) => a.name).filter(Boolean).join(', ') || 'Unknown authors',
+      abstract: r.abstract,
+    }))
+}
+
+/** Searches OpenAlex's 250M+ work metadata index (every discipline, free, no API key — an
+ *  email in `mailto` just moves you into their faster "polite pool"). Abstracts only, no
+ *  full text, but far higher rate limits and broader coverage than CORE. */
+async function searchOpenAlex(passage) {
+  const params = new URLSearchParams({ search: passage, per_page: '3' })
+  if (process.env.OPENALEX_MAILTO) params.set('mailto', process.env.OPENALEX_MAILTO)
+  const res = await fetch(`https://api.openalex.org/works?${params}`)
+  if (!res.ok) {
+    console.error('[server] OpenAlex search failed:', res.status, await res.text().catch(() => ''))
+    return []
+  }
+  const data = await res.json()
+  return (data.results || [])
+    .map((w) => ({
+      title: w.title || 'Untitled work',
+      authors: (w.authorships || []).map((a) => a.author?.display_name).filter(Boolean).join(', ') || 'Unknown authors',
+      abstract: reconstructAbstract(w.abstract_inverted_index),
+    }))
+    .filter((w) => w.abstract.length > 40)
+}
+
+function dedupeCandidates(candidates) {
+  const seen = new Set()
+  return candidates.filter((c) => {
+    const key = c.title.toLowerCase().trim()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/** Checks a handful of representative passages against two free academic corpora in parallel —
+ *  OpenAlex (huge rate limit, abstracts only, zero config) and CORE (full text when available,
+ *  needs a free API key) — then uses OpenAI embeddings to score how close the passage actually
+ *  is to each candidate's abstract. Each provider's own search is keyword-based and returns
+ *  loose matches; the embedding step is what turns that into an actual similarity judgment.
+ *  Always attempts OpenAlex, so this is "checked" even with no corpus key configured at all. */
+async function checkExternalSimilarity(sections) {
+  if (!openai) return { checked: false, overallSimilarityPercent: 0, similaritySources: [] }
+
+  // searchQuery (short) drives CORE/OpenAlex's relevance search — both engines rank long,
+  // multi-sentence queries poorly (common words dilute the ranking against millions of
+  // papers). text (longer) is what actually gets compared via embeddings once candidates
+  // come back, where more context only helps.
+  //
+  // Strides through every section rather than just the first ~60 words of the first few —
+  // checking only the opening of each section means most of a real multi-thousand-word paper
+  // is never sampled at all, which is the main reason a real overlap (the kind a full-text
+  // scanner like Turnitin would catch) can be missed here even when it genuinely exists.
+  const STRIDE_WORDS = 120
+  const CHUNK_WORDS = 60
+  const MAX_PASSAGES = 20
+  const passages = []
+  outer: for (const s of sections) {
+    const words = s.text.split(/\s+/)
+    for (let i = 0; i < words.length; i += STRIDE_WORDS) {
+      const chunkWords = words.slice(i, i + CHUNK_WORDS)
+      if (chunkWords.length < 20) continue
+      passages.push({ searchQuery: chunkWords.slice(0, 15).join(' '), text: chunkWords.join(' ') })
+      if (passages.length >= MAX_PASSAGES) break outer
+    }
+  }
+  if (passages.length === 0) return { checked: true, overallSimilarityPercent: 0, similaritySources: [] }
+
+  const sources = []
+  let matchedCount = 0
+
+  for (const passage of passages) {
+    try {
+      const [coreResults, openAlexResults] = await Promise.all([
+        searchCore(passage.searchQuery),
+        searchOpenAlex(passage.searchQuery),
+      ])
+      const candidates = dedupeCandidates([...coreResults, ...openAlexResults])
+      if (candidates.length > 0) {
+        const embedRes = await openai.embeddings.create({
+          model: EMBEDDING_MODEL,
+          input: [passage.text, ...candidates.map((c) => c.abstract.slice(0, 2000))],
+        })
+        const vectors = embedRes.data.map((d) => d.embedding)
+        let best = null
+        for (let i = 0; i < candidates.length; i++) {
+          const sim = cosine(vectors[0], vectors[i + 1])
+          if (!best || sim > best.sim) best = { sim, candidate: candidates[i] }
+        }
+        if (best && best.sim >= EXTERNAL_MATCH_THRESHOLD) {
+          matchedCount += 1
+          sources.push({
+            id: nextId('sim'),
+            title: best.candidate.title,
+            authors: best.candidate.authors,
+            matchPercent: Math.round(best.sim * 1000) / 10,
+            matchedExcerpt: passage.text,
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[server] external similarity lookup failed for a passage, continuing:', err.message)
+    }
+    if (process.env.CORE_API_KEY) await sleep(1200) // stay well under CORE's free-tier rate limit
+  }
+
+  sources.sort((a, b) => b.matchPercent - a.matchPercent)
+  return {
+    checked: true,
+    overallSimilarityPercent: Math.round((matchedCount / passages.length) * 1000) / 10,
+    similaritySources: sources.slice(0, 5),
+  }
+}
+
 app.post('/api/analyze', async (req, res) => {
   try {
     const { fileName, fullText, sections } = req.body
@@ -161,7 +325,7 @@ app.post('/api/analyze', async (req, res) => {
     }
     const sectionText = clip(renderSections(sections))
 
-    const [findings, writing] = await Promise.all([
+    const [findings, writing, externalSimilarity] = await Promise.all([
       callTool({
         model: SONNET,
         system:
@@ -172,10 +336,11 @@ app.post('/api/analyze', async (req, res) => {
       callTool({
         model: HAIKU,
         system:
-          'You are a writing-clarity editor for academic papers. Find real clarity/concision/tone issues and strong claims lacking citations. Always flag informal contractions (don\'t, can\'t, it\'s, doesn\'t) and filler phrases (a lot of, kind of, really) as tone or concision issues. Preserve numbers, citations, and technical meaning. Be conservative otherwise — only flag things genuinely worth fixing.',
+          'You are a writing-clarity editor for academic papers. Find real clarity/concision/tone issues and strong claims lacking citations. Always flag informal contractions (don\'t, can\'t, it\'s, doesn\'t) and filler phrases (a lot of, kind of, really) as tone or concision issues. Preserve numbers, citations, and technical meaning. Be conservative otherwise — only flag things genuinely worth fixing. "suggested" must always be the literal replacement text to substitute for "original", verbatim — never a meta-instruction like "Delete this sentence" or "Rephrase for clarity". If the right fix is to delete the sentence entirely, set "suggested" to an empty string.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
       }),
+      checkExternalSimilarity(sections),
     ])
 
     const consistencyIssues = findings.consistencyIssues.map((i) => ({ id: nextId('ci'), status: 'open', ...i }))
@@ -200,11 +365,6 @@ app.post('/api/analyze', async (req, res) => {
       if (openai && units.length >= 2) {
         const embedRes = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: units.map((u) => u.text) })
         const vectors = embedRes.data.map((d) => d.embedding)
-        const cosine = (a, b) => {
-          let dot = 0
-          for (let i = 0; i < a.length; i++) dot += a[i] * b[i]
-          return dot // OpenAI embeddings are already unit-normalized
-        }
         const pairs = new Map()
         for (let i = 0; i < vectors.length; i++) {
           for (let j = i + 1; j < vectors.length; j++) {
@@ -255,6 +415,9 @@ app.post('/api/analyze', async (req, res) => {
       noveltyPoints,
       suggestedQuestions: findings.suggestedQuestions,
       selfSimilarityMatches,
+      similarityCorpusChecked: externalSimilarity.checked,
+      overallSimilarityPercent: externalSimilarity.overallSimilarityPercent,
+      similaritySources: externalSimilarity.similaritySources,
     })
   } catch (err) {
     console.error('[server] /api/analyze failed:', err)

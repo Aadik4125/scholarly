@@ -172,6 +172,10 @@ export default function UploadPage() {
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0]
+                      // Reset so picking the same file again (e.g. a re-exported draft with
+                      // an unchanged name) still fires this handler — browsers don't fire
+                      // 'change' a second time if the input's value didn't change.
+                      e.target.value = ''
                       if (file) handleRealFile(file)
                     }}
                   />
