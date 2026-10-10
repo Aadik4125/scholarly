@@ -213,6 +213,7 @@ async function searchCore(passage) {
 async function searchOpenAlex(passage) {
   const params = new URLSearchParams({ search: passage, per_page: '3' })
   if (process.env.OPENALEX_MAILTO) params.set('mailto', process.env.OPENALEX_MAILTO)
+  if (process.env.OPENALEX_API_KEY) params.set('api_key', process.env.OPENALEX_API_KEY)
   const res = await fetch(`https://api.openalex.org/works?${params}`)
   if (!res.ok) {
     console.error('[server] OpenAlex search failed:', res.status, await res.text().catch(() => ''))
