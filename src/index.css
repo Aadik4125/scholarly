@@ -1,12 +1,11 @@
 @import "tailwindcss";
-@import "@fontsource-variable/inter";
 @import "@fontsource/anton";
 @import "@fontsource-variable/caveat";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --font-sans: 'InterVariable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Times New Roman', Times, 'Liberation Serif', serif;
   --font-display: 'Anton', 'Arial Narrow', sans-serif;
   --font-hand: 'Caveat Variable', 'Comic Sans MS', cursive;
 

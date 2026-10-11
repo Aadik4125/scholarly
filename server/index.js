@@ -1,6 +1,10 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
+import rateLimit from 'express-rate-limit'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 
@@ -29,8 +33,42 @@ const EXTERNAL_MATCH_THRESHOLD = 0.8
 const CORE_API_BASE = 'https://api.core.ac.uk/v3'
 
 const app = express()
-app.use(cors())
+// Behind a host's load balancer (Render, Railway, Fly...) the client IP arrives in
+// X-Forwarded-For; trusting one hop lets the rate limits below key on the real visitor.
+app.set('trust proxy', Number(process.env.TRUST_PROXY ?? (process.env.NODE_ENV === 'production' ? 1 : 0)))
+app.disable('x-powered-by')
+
+// In production the API and the site share one origin, so no cross-origin access is needed.
+// Other origins (e.g. a separately hosted frontend) must be listed in ALLOWED_ORIGINS.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean)
+if (allowedOrigins.length) app.use('/api', cors({ origin: allowedOrigins }))
 app.use(express.json({ limit: '15mb' }))
+
+// Every /api/analyze call spends Claude, OpenAI and OpenAlex credits, so cap it per visitor
+// and site-wide; /api/ask is one Claude call, so it gets a looser per-visitor cap.
+const limitMessage = (message) => ({ error: message })
+const analyzePerIp = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: Number(process.env.ANALYZE_LIMIT_PER_HOUR || 5),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: limitMessage('You have reached the hourly limit for paper analyses. Please try again later.'),
+})
+const analyzeDaily = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: Number(process.env.ANALYZE_LIMIT_PER_DAY || 100),
+  keyGenerator: () => 'global',
+  standardHeaders: false,
+  legacyHeaders: false,
+  message: limitMessage('Scholarly has reached its analysis limit for today. Please try again tomorrow.'),
+})
+const askPerIp = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: Number(process.env.ASK_LIMIT_PER_HOUR || 40),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: limitMessage('You have reached the hourly question limit. Please try again later.'),
+})
 
 // Prototype-level cost guard: cap how much raw document text any single call sends.
 const MAX_CHARS = 20000
@@ -748,7 +786,7 @@ async function checkSelfSimilarity(sections) {
   }
 }
 
-app.post('/api/analyze', async (req, res) => {
+app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
   try {
     const { fileName, fullText, sections } = req.body
     if (!fullText || !Array.isArray(sections)) {
@@ -803,7 +841,7 @@ app.post('/api/analyze', async (req, res) => {
   }
 })
 
-app.post('/api/ask', async (req, res) => {
+app.post('/api/ask', askPerIp, async (req, res) => {
   try {
     const { fileName, fullText, title, question } = req.body
     if (!question || !fullText) return res.status(400).json({ error: 'question and fullText are required' })
@@ -825,6 +863,15 @@ app.post('/api/ask', async (req, res) => {
 })
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
+
+// Production: serve the built site (npm run build -> dist/) from this same server, with
+// client-side routes like /paper/:id falling back to index.html.
+const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
+if (existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir, { index: false, maxAge: '1h' }))
+  app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
+}
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }))
 
 app.listen(PORT, () => {
   console.log(`[server] Scholarly API listening on http://localhost:${PORT}`)

@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useCallback, useEffect } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText,
@@ -11,12 +11,14 @@ import {
   Loader2,
   Moon,
   Sun,
+  ArrowRight,
+  Trash2,
 } from 'lucide-react'
 import { useTheme } from '../hooks/useTheme'
 import { useSessionFile } from '../hooks/useSessionFile'
 import { useToast } from '../hooks/useToast'
 import { analyzePaperWithAI } from '../lib/aiEngine'
-import { savePaper } from '../lib/paperDb'
+import { savePaper, listPapers, deletePaper, type PaperSummary } from '../lib/paperDb'
 import StickyTag from '../components/StickyTag'
 import Polaroid from '../components/Polaroid'
 
@@ -43,7 +45,19 @@ export default function UploadPage() {
   const [fileName, setFileName] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(-1)
 
+  const [papers, setPapers] = useState<PaperSummary[]>([])
+
   const isProcessing = fileName !== null
+
+  useEffect(() => {
+    listPapers().then(setPapers).catch((err) => console.error(err))
+  }, [])
+
+  const handleDelete = useCallback(async (paper: PaperSummary) => {
+    if (!window.confirm(`Remove "${paper.title}" and its saved analysis from this browser?`)) return
+    await deletePaper(paper.id)
+    setPapers((prev) => prev.filter((p) => p.id !== paper.id))
+  }, [])
 
   const runDemoProcessing = useCallback(
     (displayName: string) => {
@@ -216,6 +230,50 @@ export default function UploadPage() {
             )}
           </AnimatePresence>
         </motion.div>
+
+        <p className="mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
+          Privacy: your paper's text is sent to Anthropic (Claude) and OpenAI for analysis and short passages are
+          searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
+          file are saved only in this browser, and you can remove them below at any time.
+        </p>
+
+        {papers.length > 0 && !isProcessing && (
+          <motion.section
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.24 }}
+            className="ink-border mx-auto mt-8 max-w-xl rounded-3xl bg-surface text-left shadow-[var(--shadow-card)]"
+          >
+            <h2 className="border-b-[1.5px] border-line px-5 py-3 font-display text-base tracking-wide text-ink uppercase">
+              Your papers
+            </h2>
+            <ul className="divide-y-[1.5px] divide-line">
+              {papers.map((p) => (
+                <li key={p.id} className="flex items-center gap-2 pr-3 transition-colors hover:bg-surface-hover">
+                  <Link to={`/paper/${p.id}`} className="flex min-w-0 flex-1 items-center gap-3 px-5 py-3">
+                    <FileText size={18} className="shrink-0 text-ink-2" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-ink">{p.title}</p>
+                      <p className="truncate text-xs text-ink-muted">
+                        {p.fileName} · {new Date(p.uploadedAt).toLocaleDateString()} · {p.openIssueCount} open issue
+                        {p.openIssueCount === 1 ? '' : 's'}
+                        {p.draftCount > 1 ? ` · ${p.draftCount} drafts` : ''}
+                      </p>
+                    </div>
+                    <ArrowRight size={16} className="shrink-0 text-ink-2" />
+                  </Link>
+                  <button
+                    onClick={() => handleDelete(p)}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-muted hover:bg-sticky-pink hover:text-ink-on-sticky"
+                    title="Remove from this browser"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </motion.section>
+        )}
 
         <motion.div
           initial={{ opacity: 0, y: 14 }}

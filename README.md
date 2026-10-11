@@ -1,32 +1,42 @@
-# React + TypeScript + Vite
+# Scholarly
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+AI academic research & integrity copilot: upload a paper (PDF/DOCX) to get consistency checks,
+writing suggestions, citation gaps, novelty notes, and external/internal similarity.
 
-Currently, two official plugins are available:
+## Local development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+cp .env.example .env   # or create .env with the keys below
+npm run dev            # Vite on :5173, API on :8787 (proxied under /api)
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | Consistency, novelty, writing, Ask My Paper |
+| `OPENAI_API_KEY` | recommended | Embeddings for similarity checks |
+| `OPENALEX_API_KEY` | recommended | External similarity search (free tier ≈ $1/day of requests) |
+| `CORE_API_KEY` | optional | Extra open-access full-text corpus |
+| `OPENALEX_MAILTO` | optional | Contact email for OpenAlex |
+| `PORT` | no | Server port (default 8787; hosts usually set it) |
+| `ANALYZE_LIMIT_PER_HOUR` | no | Analyses per visitor per hour (default 5) |
+| `ANALYZE_LIMIT_PER_DAY` | no | Analyses site-wide per day (default 100) |
+| `ASK_LIMIT_PER_HOUR` | no | Ask My Paper questions per visitor per hour (default 40) |
+| `ALLOWED_ORIGINS` | no | Comma-separated origins allowed to call the API cross-origin (default: none — same origin only) |
+| `TRUST_PROXY` | no | Proxy hops in front of the server (default 1 in production, 0 otherwise) |
+
+## Production
+
+```bash
+npm ci
+npm run build   # type-checks and builds the site into dist/
+npm start       # serves dist/ and /api from one Node server on $PORT
+```
+
+On Render / Railway: build command `npm ci && npm run build`, start command `npm start`,
+and add the environment variables above in the host's dashboard (never commit `.env`).
+Also set monthly spending limits in the Anthropic and OpenAI consoles.
+
+Papers and results are stored in each visitor's browser (IndexedDB); the server stores nothing.
