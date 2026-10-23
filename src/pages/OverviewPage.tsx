@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack } from 'lucide-react'
+import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack, Bot } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import SeverityBadge from '../components/SeverityBadge'
@@ -80,7 +80,7 @@ export default function OverviewPage() {
       <DocumentViewerCard />
 
       <motion.div variants={container} initial="hidden" animate="show">
-        <motion.div variants={item} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <motion.div variants={item} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${paper.aiContent?.checked ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
           <StatCard
             icon={ShieldAlert}
             label="Open consistency issues"
@@ -116,6 +116,19 @@ export default function OverviewPage() {
             />
           )}
           <StatCard icon={Sparkles} label="Citation gaps" value={paper.citationGaps.length} tone="purple" rotate={1.5} />
+          {paper.aiContent?.checked && (
+            <Link to={`/paper/${paperId}/ai-content`} className="block">
+              <StatCard
+                icon={Bot}
+                label="Likely AI-generated text"
+                value={paper.aiContent.aiPercent}
+                suffix="%"
+                decimals={1}
+                tone="green"
+                rotate={-1.5}
+              />
+            </Link>
+          )}
         </motion.div>
 
         <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">

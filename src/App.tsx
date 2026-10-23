@@ -8,6 +8,7 @@ import WritingPage from './pages/WritingPage'
 import SimilarityPage from './pages/SimilarityPage'
 import NoveltyPage from './pages/NoveltyPage'
 import VersionsPage from './pages/VersionsPage'
+import AiContentPage from './pages/AiContentPage'
 import { ThemeProvider } from './hooks/useTheme'
 import { ToastProvider } from './hooks/useToast'
 import { SessionFileProvider } from './hooks/useSessionFile'
@@ -29,6 +30,7 @@ export default function App() {
                   <Route path="ask" element={<AskPaperPage />} />
                   <Route path="writing" element={<WritingPage />} />
                   <Route path="similarity" element={<SimilarityPage />} />
+                  <Route path="ai-content" element={<AiContentPage />} />
                   <Route path="novelty" element={<NoveltyPage />} />
                   <Route path="versions" element={<VersionsPage />} />
                 </Route>

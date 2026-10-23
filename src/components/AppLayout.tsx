@@ -14,6 +14,7 @@ import {
   Sun,
   UploadCloud,
   Loader2,
+  Bot,
 } from 'lucide-react'
 import { useTheme } from '../hooks/useTheme'
 import { CurrentPaperProvider, useCurrentPaper } from '../hooks/useCurrentPaper'
@@ -24,6 +25,7 @@ const navItems = [
   { to: 'ask', label: 'Ask Paper', icon: MessageCircleQuestion },
   { to: 'writing', label: 'Writing', icon: PenLine },
   { to: 'similarity', label: 'Similarity', icon: Fingerprint },
+  { to: 'ai-content', label: 'AI Content', icon: Bot },
   { to: 'novelty', label: 'Novelty', icon: Sparkles },
   { to: 'versions', label: 'Versions', icon: History },
 ]

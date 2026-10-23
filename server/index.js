@@ -14,6 +14,7 @@ if (!process.env.ANTHROPIC_API_KEY) console.warn('[server] ANTHROPIC_API_KEY is 
 if (!process.env.OPENAI_API_KEY) console.warn('[server] OPENAI_API_KEY is not set in .env — the self-similarity embeddings step will be skipped until it is')
 if (!process.env.CORE_API_KEY) console.warn('[server] CORE_API_KEY is not set in .env — external similarity will still run against OpenAlex, just without CORE\'s full-text corpus layered in')
 if (!process.env.OPENALEX_API_KEY) console.warn('[server] OPENALEX_API_KEY is not set in .env — OpenAlex requests will draw on the small keyless daily budget shared by your whole IP address, and fail once it runs out')
+if (!process.env.SAPLING_API_KEY) console.warn('[server] SAPLING_API_KEY is not set in .env — the AI-content check will be skipped until it is')
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
@@ -728,6 +729,103 @@ async function checkExternalSimilarity(sections) {
 
 /** Flags near-duplicate passages within the document itself (across different sections), via
  *  OpenAI embeddings — repetition, not external copying. */
+// --- AI-content detection ------------------------------------------------------------------
+// Sapling's detector scores each sentence for how likely it is to be AI-generated. Its quotas
+// are counted in characters (free tier: 50k/day; every key: 120k per 2 minutes), so each paper
+// sends at most AI_DETECT_MAX_CHARS, shared across sections in proportion to their length so
+// every section is represented. Reference lists and acknowledgements are skipped: they aren't
+// prose and only distort the score.
+const SAPLING_DETECT_URL = 'https://api.sapling.ai/api/v1/aidetect'
+const AI_DETECT_MAX_CHARS = Number(process.env.AI_DETECT_MAX_CHARS || 45000)
+const AI_DETECT_MIN_SECTION_CHARS = 200
+const AI_SENTENCE_THRESHOLD = 0.5
+const AI_DETECT_SKIP_HEADING = /reference|bibliograph|acknowledg|works cited/i
+
+/** Cuts text to at most maxChars, ending on a sentence boundary when one is reasonably close. */
+function clipAtSentence(text, maxChars) {
+  if (text.length <= maxChars) return text
+  const cut = text.slice(0, maxChars)
+  const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '))
+  return lastStop > maxChars * 0.6 ? cut.slice(0, lastStop + 1) : cut
+}
+
+async function saplingDetect(texts) {
+  const res = await fetch(SAPLING_DETECT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: process.env.SAPLING_API_KEY, texts, sent_scores: true }),
+    signal: AbortSignal.timeout(60_000),
+  })
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => '')).slice(0, 200)
+    const err = new Error(`Sapling ${res.status}: ${detail}`)
+    err.status = res.status
+    throw err
+  }
+  return (await res.json()).results || []
+}
+
+/** Returns { checked, aiPercent, sections: [{ heading, text, aiFraction, sentences: [{ start,
+ *  end, score }] }], warning }. aiPercent is the share of scored text in sentences the detector
+ *  rates at or above AI_SENTENCE_THRESHOLD. */
+async function checkAiContent(sections) {
+  if (!process.env.SAPLING_API_KEY) {
+    return { checked: false, aiPercent: 0, sections: [], warning: null }
+  }
+  const eligible = sections
+    .filter((s) => !AI_DETECT_SKIP_HEADING.test(s.heading))
+    .map((s) => ({ heading: s.heading, text: s.text.replace(/\s+/g, ' ').trim() }))
+    .filter((s) => s.text.length >= AI_DETECT_MIN_SECTION_CHARS)
+  const totalChars = eligible.reduce((n, s) => n + s.text.length, 0)
+  if (totalChars === 0) return { checked: false, aiPercent: 0, sections: [], warning: 'No prose long enough to check.' }
+
+  const scale = Math.min(1, AI_DETECT_MAX_CHARS / totalChars)
+  const items = eligible
+    .map((s) => ({ heading: s.heading, text: clipAtSentence(s.text, Math.floor(s.text.length * scale)) }))
+    .filter((s) => s.text.length >= AI_DETECT_MIN_SECTION_CHARS)
+
+  // Sapling accepts up to 10 texts per request; batches run one after another to stay inside
+  // its per-2-minute character window.
+  const results = []
+  let warning = scale < 1 ? `Checked a ${Math.round(scale * 100)}% sample of each section to stay within the detector's limits.` : null
+  for (let i = 0; i < items.length; i += 10) {
+    const batch = items.slice(i, i + 10)
+    try {
+      const scored = await saplingDetect(batch.map((b) => b.text))
+      batch.forEach((b, k) => scored[k] && results.push({ ...b, result: scored[k] }))
+    } catch (err) {
+      console.error('[server] AI-content detection failed:', err.message)
+      warning =
+        err.status === 429
+          ? 'The AI-content detector’s usage limit was reached, so only part of the paper (or none of it) was checked.'
+          : err.status === 401 || err.status === 403
+            ? 'The AI-content detector rejected the API key — check SAPLING_API_KEY.'
+            : 'The AI-content detector could not be reached for part of the paper.'
+      break
+    }
+  }
+
+  let scoredChars = 0
+  let aiChars = 0
+  const out = results.map(({ heading, text, result }) => {
+    const sentences = (result.sentence_scores || [])
+      .filter((x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start)
+      .map((x) => ({ start: x.start, end: x.end, score: Math.round(x.score * 1000) / 1000 }))
+    for (const x of sentences) {
+      scoredChars += x.end - x.start
+      if (x.score >= AI_SENTENCE_THRESHOLD) aiChars += x.end - x.start
+    }
+    return { heading, text, aiFraction: result.ai_fraction ?? null, sentences }
+  })
+
+  return {
+    checked: out.length > 0,
+    aiPercent: scoredChars ? Math.round((aiChars / scoredChars) * 1000) / 10 : 0,
+    sections: out,
+    warning,
+  }
+}
+
 async function checkSelfSimilarity(sections) {
   try {
     const units = []
@@ -798,7 +896,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
     const timed = (label, promise) =>
       promise.finally(() => console.log(`[server] ${label} finished in ${((Date.now() - started) / 1000).toFixed(1)}s`))
 
-    const [findings, writing, externalSimilarity, selfSimilarityMatches] = await Promise.all([
+    const [findings, writing, externalSimilarity, selfSimilarityMatches, aiContent] = await Promise.all([
       timed('consistency & novelty (Sonnet)', callTool({
         model: SONNET,
         system:
@@ -815,6 +913,10 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       })),
       timed('external similarity', checkExternalSimilarity(sections)),
       timed('internal repetition', checkSelfSimilarity(sections)),
+      timed('AI-content detection', checkAiContent(sections).catch((err) => {
+        console.error('[server] AI-content detection crashed, continuing without it:', err)
+        return { checked: false, aiPercent: 0, sections: [], warning: 'The AI-content check failed unexpectedly.' }
+      })),
     ])
 
     // Defaults guard against a truncated tool call — one missing list shouldn't fail the analysis.
@@ -834,6 +936,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       overallSimilarityPercent: externalSimilarity.overallSimilarityPercent,
       similaritySources: externalSimilarity.similaritySources,
       similarityWarning: externalSimilarity.similarityWarning,
+      aiContent,
     })
   } catch (err) {
     console.error('[server] /api/analyze failed:', err)

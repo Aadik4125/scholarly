@@ -232,8 +232,8 @@ export default function UploadPage() {
         </motion.div>
 
         <p className="mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
-          Privacy: your paper's text is sent to Anthropic (Claude) and OpenAI for analysis and short passages are
-          searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
+          Privacy: your paper's text is sent to Anthropic (Claude), OpenAI and Sapling (AI-content detection) for
+          analysis, and short passages are searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
           file are saved only in this browser, and you can remove them below at any time.
         </p>
 

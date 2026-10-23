@@ -19,6 +19,8 @@ npm run dev            # Vite on :5173, API on :8787 (proxied under /api)
 | `OPENAI_API_KEY` | recommended | Embeddings for similarity checks |
 | `OPENALEX_API_KEY` | recommended | External similarity search (free tier ≈ $1/day of requests) |
 | `CORE_API_KEY` | optional | Extra open-access full-text corpus |
+| `SAPLING_API_KEY` | optional | AI-content detection (sapling.ai) |
+| `AI_DETECT_MAX_CHARS` | no | Max characters per paper sent to the AI detector (default 45000) |
 | `OPENALEX_MAILTO` | optional | Contact email for OpenAlex |
 | `PORT` | no | Server port (default 8787; hosts usually set it) |
 | `ANALYZE_LIMIT_PER_HOUR` | no | Analyses per visitor per hour (default 5) |

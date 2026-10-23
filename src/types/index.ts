@@ -88,6 +88,31 @@ export interface PaperSection {
   excerpt: string
 }
 
+export interface AiContentSentence {
+  /** Character offsets into the parent section's text. */
+  start: number
+  end: number
+  /** Detector's probability (0-1) that this sentence is AI-generated. */
+  score: number
+}
+
+export interface AiContentSection {
+  heading: string
+  /** The text that was scored — may be a sample of the section for long papers. */
+  text: string
+  aiFraction: number | null
+  sentences: AiContentSentence[]
+}
+
+export interface AiContentResult {
+  /** False when no detector is configured or every request failed. */
+  checked: boolean
+  /** Share of scored text in sentences the detector rates as likely AI-generated (0-100). */
+  aiPercent: number
+  sections: AiContentSection[]
+  warning: string | null
+}
+
 export interface Paper {
   id: string
   title: string
@@ -124,4 +149,7 @@ export interface Paper {
   /** Set when OpenAlex/CORE searches failed on some or all passages (e.g. rate limits), so the
    *  score covers fewer passages than intended — or none. 'ai' mode only. */
   similarityWarning?: string | null
+  /** AI-generated-text likelihood from the detector (Sapling). 'ai' mode only; absent on
+   *  papers analyzed before this check existed. */
+  aiContent?: AiContentResult
 }
