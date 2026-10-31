@@ -13,6 +13,7 @@ writeFileSync(
 )
 process.env.AI_DETECT_MODEL_DIR = dir
 const { detect, detectorStatus, loadDetector } = await import('./index.js')
+const { windows } = await import('./text.js')
 await loadDetector()
 
 test('loads the model', () => {
@@ -32,9 +33,27 @@ test('sentence offsets index into the input and scores reflect windows', async (
 
 test('window budget truncates long input', async () => {
   const text = Array.from({ length: 50 }, (_, i) => `Sentence number ${i}.`).join(' ')
-  const res = await detect(text, { windows: 5 })
+  const res = await detect(text, { windows: 5, stride: 1 })
   assert.equal(res.truncated, true)
   assert.equal(res.sentence_scores.length, 7) // windows 0..4 cover sentences 0..6
+})
+
+test('stride skips overlap but still covers every sentence', async () => {
+  assert.deepEqual(windows(7, 3, 2), [[0, 3], [2, 5], [4, 7]])
+  assert.deepEqual(windows(8, 3, 2), [[0, 3], [2, 5], [4, 7], [5, 8]]) // tail window added
+  assert.deepEqual(windows(5, 3, 1), [[0, 3], [1, 4], [2, 5]])
+  const text = Array.from({ length: 50 }, (_, i) => `Sentence number ${i}.`).join(' ')
+  const res = await detect(text, { windows: 1e6, stride: 2 })
+  assert.equal(res.sentence_scores.length, 50)
+  assert.equal(res.truncated, false)
+})
+
+test('time limit stops scoring', async () => {
+  const text = Array.from({ length: 50 }, (_, i) => `Sentence number ${i}.`).join(' ')
+  const budget = { windows: 1e6, deadline: Date.now() - 1 }
+  const res = await detect(text, budget)
+  assert.equal(budget.timedOut, true)
+  assert.equal(res.sentence_scores.length, 0)
 })
 
 test('short text gets a single window', async () => {

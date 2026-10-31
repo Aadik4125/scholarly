@@ -35,11 +35,14 @@ export function sentenceSpans(text) {
 }
 
 /** Sentence-index ranges [i, j) of each scoring window. Short texts get a single window. */
-export function windows(nSentences, size = WINDOW_SIZE) {
+/** [start, end) sentence ranges of `size` sentences, starting every `stride` sentences. A
+ *  stride above 1 skips overlap to save work; a final window is added so the tail is covered. */
+export function windows(nSentences, size = WINDOW_SIZE, stride = 1) {
   if (nSentences <= 0) return []
   if (nSentences <= size) return [[0, nSentences]]
   const out = []
-  for (let i = 0; i + size <= nSentences; i++) out.push([i, i + size])
+  for (let i = 0; i + size <= nSentences; i += stride) out.push([i, i + size])
+  if (out.at(-1)[1] < nSentences) out.push([nSentences - size, nSentences])
   return out
 }
 

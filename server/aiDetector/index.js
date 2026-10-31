@@ -19,6 +19,9 @@ import { sentenceSpans, windows } from './text.js'
 
 const DEFAULT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'models')
 const MAX_WINDOWS = Number(process.env.AI_DETECT_MAX_WINDOWS || 4000)
+// Sentences between window starts. 1 scores every overlapping window; the default 2 does about
+// half the work with no measurable accuracy loss (see detector/README.md).
+const STRIDE = Math.max(1, Number(process.env.AI_DETECT_STRIDE || 2))
 
 let detector = null
 let loadError = null
@@ -91,7 +94,7 @@ export async function detect(text, budget = { windows: MAX_WINDOWS }) {
   await loadDetector()
   if (!detector) throw new Error(loadError?.message || 'AI detector not loaded')
   const spans = sentenceSpans(text)
-  const all = windows(spans.length)
+  const all = windows(spans.length, undefined, budget.stride ?? STRIDE)
   const wanted = all.slice(0, Math.max(0, budget.windows))
   const texts = wanted.map(([i, j]) => text.slice(spans[i][0], spans[j - 1][1]))
   const scores = []

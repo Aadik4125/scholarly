@@ -40,6 +40,18 @@ To run every experiment on every split, repeat steps 4–8 with `--split` set to
 ## Design notes
 - **One text spec, two languages.** `features/text.py` and `features/linguistic.py` have exact JS twins. Parity fixtures (exported texts with expected tokens, features and scores) fail the Node test if the two drift apart.
 - **Windows.** The app needs per-sentence scores. Single sentences are too short to judge, so models train on whole documents *and* on 3-sentence windows. A sentence's score is the mean over the windows that contain it (`models/common.py:score_documents`, `server/aiDetector/index.js`).
+- **Window stride.** The server starts a window every 2 sentences (`AI_DETECT_STRIDE`, default 2) instead of every sentence, which roughly halves transformer work on long papers. Measured with the fusion model on 800 held-out test docs, 400 audit abstracts and 150 mixed human+AI docs:
+
+  | | stride 1 | stride 2 | stride 3 |
+  |---|---|---|---|
+  | Windows scored | 12,629 | 7,294 | 5,549 |
+  | ROC-AUC (mean score) | 0.970 | 0.970 | 0.970 |
+  | Human test docs flagged (≥50% AI) | 6.0% | 5.8% | 7.0% |
+  | Human audit abstracts flagged | 2.3% | 2.0% | 3.0% |
+  | AI test docs caught | 89.3% | 90.0% | 88.8% |
+  | Sentence accuracy, mixed docs | 85.6% | 84.7% | 83.0% |
+
+  Stride 2 is within noise of stride 1 (400 human docs give about ±1.2 points); stride 3 flags more human text, so it isn't the default.
 - **Blending, not out-of-fold.** Fusion and FITRON train on base-model predictions for `val` and are evaluated on `test`. 5-fold out-of-fold training of the transformer would mean five fine-tunes on a laptop, and blending is equally leakage-safe.
 - **FITRON is research-only.** `FITRONModel.fit()` makes its own non-grouped random split, `rank()` retrains on whatever it is given, and TOPSIS scores are relative to the batch. So it can neither be evaluated on a leakage-safe test set as-is nor score one new paper in production. The experiments call its core components (fuzzy profile, tuned decision tree, TOPSIS) under our protocol instead.
 - **Headline metric:** TPR at 1% FPR, plus the human-academic audit FPR. In an education setting, falsely flagging a human is the expensive error.
