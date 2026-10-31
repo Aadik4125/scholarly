@@ -80,15 +80,31 @@ export function detectorStatus() {
   return detector ? { ready: true, version: detector.version } : { ready: false, error: loadError?.message }
 }
 
-/** Scores one block of whitespace-collapsed text. Offsets index into `text` as given. */
+// Windows scored per chunk. Between chunks the detector yields to other requests and checks
+// the budget's deadline, so a slow CPU can't stall the rest of the analysis.
+const CHUNK = 16
+
+/** Scores one block of whitespace-collapsed text. Offsets index into `text` as given.
+ *  budget: { windows, deadline? } shared across calls; `deadline` is a Date.now() timestamp
+ *  after which scoring stops (budget.timedOut is then set). */
 export async function detect(text, budget = { windows: MAX_WINDOWS }) {
   await loadDetector()
   if (!detector) throw new Error(loadError?.message || 'AI detector not loaded')
   const spans = sentenceSpans(text)
   const all = windows(spans.length)
-  const ws = all.slice(0, Math.max(0, budget.windows))
+  const wanted = all.slice(0, Math.max(0, budget.windows))
+  const texts = wanted.map(([i, j]) => text.slice(spans[i][0], spans[j - 1][1]))
+  const scores = []
+  for (let c = 0; c < texts.length; c += CHUNK) {
+    if (budget.deadline && Date.now() > budget.deadline) {
+      budget.timedOut = true
+      break
+    }
+    scores.push(...(await detector.scoreWindows(texts.slice(c, c + CHUNK))))
+    await new Promise((r) => setImmediate(r))
+  }
+  const ws = wanted.slice(0, scores.length)
   budget.windows -= ws.length
-  const scores = await detector.scoreWindows(ws.map(([i, j]) => text.slice(spans[i][0], spans[j - 1][1])))
 
   const sum = new Float64Array(spans.length)
   const cnt = new Float64Array(spans.length)

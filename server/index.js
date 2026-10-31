@@ -811,13 +811,18 @@ async function checkAiContent(sections) {
   const results = []
   let warning = scale < 1 ? `Checked a ${Math.round(scale * 100)}% sample of each section to stay within the detector's limits.` : null
   if (!useSapling) {
-    // Local model: a long paper takes a few seconds on CPU with the transformer loaded.
-    const budget = { windows: Number(process.env.AI_DETECT_MAX_WINDOWS || 4000) }
-    for (const item of items) {
-      if (budget.windows <= 0) break
-      results.push({ ...item, result: await localDetect(item.text, budget) })
+    // Local model: a long paper takes seconds on a full CPU core but minutes on a small shared
+    // instance, so scoring stops at a time limit and reports what it covered.
+    const budget = {
+      windows: Number(process.env.AI_DETECT_MAX_WINDOWS || 4000),
+      deadline: Date.now() + Number(process.env.AI_DETECT_TIME_LIMIT_S || 90) * 1000,
     }
-    if (budget.windows <= 0) warning = 'The paper was too long to check completely, so only its first part was scored.'
+    for (const item of items) {
+      if (budget.windows <= 0 || budget.timedOut) break
+      const result = await localDetect(item.text, budget)
+      if (result.sentence_scores.length) results.push({ ...item, result })
+    }
+    if (budget.windows <= 0 || budget.timedOut) warning = 'The paper was too long to check completely in time, so only its first part was scored.'
   }
   // Sapling accepts up to 10 texts per request; batches run one after another to stay inside
   // its per-2-minute character window.
