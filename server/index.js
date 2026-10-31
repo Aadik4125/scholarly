@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import { detect as localDetect, detectorStatus, loadDetector } from './aiDetector/index.js'
 
 const PORT = process.env.PORT || 8787
 
@@ -14,7 +15,11 @@ if (!process.env.ANTHROPIC_API_KEY) console.warn('[server] ANTHROPIC_API_KEY is 
 if (!process.env.OPENAI_API_KEY) console.warn('[server] OPENAI_API_KEY is not set in .env — the self-similarity embeddings step will be skipped until it is')
 if (!process.env.CORE_API_KEY) console.warn('[server] CORE_API_KEY is not set in .env — external similarity will still run against OpenAlex, just without CORE\'s full-text corpus layered in')
 if (!process.env.OPENALEX_API_KEY) console.warn('[server] OPENALEX_API_KEY is not set in .env — OpenAlex requests will draw on the small keyless daily budget shared by your whole IP address, and fail once it runs out')
-if (!process.env.SAPLING_API_KEY) console.warn('[server] SAPLING_API_KEY is not set in .env — the AI-content check will be skipped until it is')
+// AI-content detection runs on our own model by default; AI_DETECT_PROVIDER=sapling switches back
+// to the Sapling API (kept for side-by-side comparison).
+const AI_DETECT_PROVIDER = (process.env.AI_DETECT_PROVIDER || 'local').toLowerCase()
+if (AI_DETECT_PROVIDER === 'sapling' && !process.env.SAPLING_API_KEY) console.warn('[server] AI_DETECT_PROVIDER=sapling but SAPLING_API_KEY is not set — the AI-content check will be skipped')
+if (AI_DETECT_PROVIDER !== 'sapling' && !(await loadDetector()).ready) console.warn('[server] the local AI-content model is missing — run `npm run fetch-models` (or set AI_DETECT_MODEL_DIR); the AI-content check will be skipped until then')
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
@@ -736,7 +741,8 @@ async function checkExternalSimilarity(sections) {
 // every section is represented. Reference lists and acknowledgements are skipped: they aren't
 // prose and only distort the score.
 const SAPLING_DETECT_URL = 'https://api.sapling.ai/api/v1/aidetect'
-const AI_DETECT_MAX_CHARS = Number(process.env.AI_DETECT_MAX_CHARS || 45000)
+// Sapling's quotas cap how much we can send; the local model is only limited by CPU time.
+const AI_DETECT_MAX_CHARS = Number(process.env.AI_DETECT_MAX_CHARS || (AI_DETECT_PROVIDER === 'sapling' ? 45000 : 300000))
 const AI_DETECT_MIN_SECTION_CHARS = 200
 const AI_SENTENCE_THRESHOLD = 0.5
 const AI_DETECT_SKIP_HEADING = /reference|bibliograph|acknowledg|works cited/i
@@ -769,7 +775,8 @@ async function saplingDetect(texts) {
  *  end, score }] }], warning }. aiPercent is the share of scored text in sentences the detector
  *  rates at or above AI_SENTENCE_THRESHOLD. */
 async function checkAiContent(sections) {
-  if (!process.env.SAPLING_API_KEY) {
+  const useSapling = AI_DETECT_PROVIDER === 'sapling'
+  if (useSapling ? !process.env.SAPLING_API_KEY : !detectorStatus().ready) {
     return { checked: false, aiPercent: 0, sections: [], warning: null }
   }
   const eligible = sections
@@ -784,11 +791,20 @@ async function checkAiContent(sections) {
     .map((s) => ({ heading: s.heading, text: clipAtSentence(s.text, Math.floor(s.text.length * scale)) }))
     .filter((s) => s.text.length >= AI_DETECT_MIN_SECTION_CHARS)
 
-  // Sapling accepts up to 10 texts per request; batches run one after another to stay inside
-  // its per-2-minute character window.
   const results = []
   let warning = scale < 1 ? `Checked a ${Math.round(scale * 100)}% sample of each section to stay within the detector's limits.` : null
-  for (let i = 0; i < items.length; i += 10) {
+  if (!useSapling) {
+    // Local model: a long paper takes a few seconds on CPU with the transformer loaded.
+    const budget = { windows: Number(process.env.AI_DETECT_MAX_WINDOWS || 4000) }
+    for (const item of items) {
+      if (budget.windows <= 0) break
+      results.push({ ...item, result: await localDetect(item.text, budget) })
+    }
+    if (budget.windows <= 0) warning = 'The paper was too long to check completely, so only its first part was scored.'
+  }
+  // Sapling accepts up to 10 texts per request; batches run one after another to stay inside
+  // its per-2-minute character window.
+  for (let i = 0; useSapling && i < items.length; i += 10) {
     const batch = items.slice(i, i + 10)
     try {
       const scored = await saplingDetect(batch.map((b) => b.text))
@@ -823,6 +839,7 @@ async function checkAiContent(sections) {
     aiPercent: scoredChars ? Math.round((aiChars / scoredChars) * 1000) / 10 : 0,
     sections: out,
     warning,
+    modelVersion: useSapling ? 'sapling' : detectorStatus().version,
   }
 }
 

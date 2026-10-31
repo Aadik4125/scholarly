@@ -66,8 +66,8 @@ export default function AiContentPage() {
       title = 'AI-content check failed'
       body = result.warning
     } else if (result) {
-      title = 'No AI-content detector connected'
-      body = 'Add SAPLING_API_KEY to the server environment, then re-upload the paper.'
+      title = 'AI-content model not installed'
+      body = 'The server is missing its AI-content model files. Run `npm run fetch-models` on the server, then re-upload the paper.'
     }
     return (
       <div>
@@ -127,6 +127,10 @@ export default function AiContentPage() {
             <li>
               Detectors can flag human writing — especially formal, formulaic passages (methods, definitions) and
               text by non-native English writers. Review the highlighted passages rather than relying on the number.
+            </li>
+            <li>
+              Sentences are judged in groups of three, so a highlighted sentence reflects its neighbours too. Very short
+              sections are skipped.
             </li>
             <li>
               This checks your paper as uploaded. Accepting Scholarly&rsquo;s writing suggestions (which are

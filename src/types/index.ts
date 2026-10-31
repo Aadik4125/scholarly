@@ -111,6 +111,8 @@ export interface AiContentResult {
   aiPercent: number
   sections: AiContentSection[]
   warning: string | null
+  /** Which detector produced the scores, e.g. "detector-v1-tfidf" or "sapling". */
+  modelVersion?: string
 }
 
 export interface Paper {

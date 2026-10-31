@@ -26,3 +26,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# AI-detector model files (fetched by `npm run fetch-models`)
+/models/
