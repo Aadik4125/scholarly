@@ -237,6 +237,23 @@ function reconstructAbstract(invertedIndex) {
 // waiting out its window, requests made while it's exhausted are skipped (null), not failed.
 let coreReadyAt = 0
 
+/** fetch() that retries network-level failures (dropped connection, DNS hiccup, hung request)
+ *  twice with backoff, so one blip doesn't fail a lookup. HTTP error responses are returned
+ *  as-is for the caller to handle. The final error names the cause, e.g. "(ECONNRESET)". */
+async function fetchRetry(url, options = {}, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, { ...options, signal: AbortSignal.timeout(20_000) })
+    } catch (err) {
+      if (attempt >= retries) {
+        const code = err.cause?.code || (err.name !== 'TypeError' ? err.name : '')
+        throw new Error(code ? `${err.message} (${code})` : err.message)
+      }
+      await sleep(1000 * 3 ** attempt)
+    }
+  }
+}
+
 function noteCoreRateLimit(res) {
   if (res.status !== 429 && res.headers.get('x-ratelimit-remaining') !== '0') return
   const retryAfter = Date.parse(res.headers.get('x-ratelimit-retry-after') || '')
@@ -250,7 +267,7 @@ function noteCoreRateLimit(res) {
 async function searchCore(passage) {
   if (!process.env.CORE_API_KEY) return []
   if (Date.now() < coreReadyAt) return null
-  const res = await fetch(`${CORE_API_BASE}/search/works?${new URLSearchParams({ q: passage, limit: '3' })}`, {
+  const res = await fetchRetry(`${CORE_API_BASE}/search/works?${new URLSearchParams({ q: passage, limit: '3' })}`, {
     headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
   })
   noteCoreRateLimit(res)
@@ -280,7 +297,7 @@ async function openAlexWorks(params) {
     const slot = Math.max(Date.now(), openAlexNextSlot)
     openAlexNextSlot = slot + OPENALEX_MIN_GAP_MS
     await sleep(slot - Date.now())
-    const res = await fetch(`https://api.openalex.org/works?${params}`)
+    const res = await fetchRetry(`https://api.openalex.org/works?${params}`)
     if (res.ok) return res.json()
     const body = await res.text().catch(() => '')
     if (res.status === 429 && attempt === 0 && !/budget/i.test(body)) {
