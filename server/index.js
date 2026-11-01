@@ -2,7 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import net from 'node:net'
@@ -1196,12 +1196,56 @@ app.post('/api/ask', askPerIp, askDaily, async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
-// Production: serve the built site (npm run build -> dist/) from this same server, with
-// client-side routes like /paper/:id falling back to index.html.
+// Production: serve the built site (npm run build -> dist/) from this same server. Every page
+// is the same index.html, so for search engines each known page gets its own title,
+// description and canonical URL, paper pages are marked noindex (they only exist in the
+// visitor's browser), and unknown addresses get a real 404 status.
+const SITE_URL = 'https://scholar.click'
+const PAGE_META = {
+  '/': null, // index.html's own tags
+  '/about': {
+    title: 'About & Contact | Scholarly',
+    description: 'What Scholarly checks in your research paper, who runs it, and how to get in touch.',
+  },
+  '/privacy': {
+    title: 'Privacy Policy | Scholarly',
+    description: 'How Scholarly handles the papers you upload: what is sent to Anthropic, OpenAI, OpenAlex and CORE, and what stays in your browser.',
+  },
+  '/terms': {
+    title: 'Terms of Use | Scholarly',
+    description: 'The terms for using Scholarly, the AI research and academic integrity copilot.',
+  },
+}
+const escapeAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+
+function renderIndex(html, pagePath, meta, noindex) {
+  let out = html
+  if (meta) {
+    out = out
+      .replace(/<title>[^<]*<\/title>/, `<title>${escapeAttr(meta.title)}</title>`)
+      .replace(/(<meta name="description" content=")[^"]*(")/, `$1${escapeAttr(meta.description)}$2`)
+  }
+  out = out
+    .replace(/(<link rel="canonical" href=")[^"]*(")/, `$1${SITE_URL}${pagePath === '/' ? '/' : pagePath}$2`)
+    .replace(/(<meta property="og:url" content=")[^"]*(")/, `$1${SITE_URL}${pagePath === '/' ? '/' : pagePath}$2`)
+  if (noindex) out = out.replace('</head>', '    <meta name="robots" content="noindex" />\n  </head>')
+  return out
+}
+
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')
 if (existsSync(path.join(distDir, 'index.html'))) {
+  const indexHtml = readFileSync(path.join(distDir, 'index.html'), 'utf8')
   app.use(express.static(distDir, { index: false, maxAge: '1h' }))
-  app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
+  app.get(/^(?!\/api(\/|$)).*/, (req, res) => {
+    const pagePath = req.path.length > 1 ? req.path.replace(/\/+$/, '') : '/'
+    res.set('Cache-Control', 'no-cache')
+    if (pagePath in PAGE_META) return res.type('html').send(renderIndex(indexHtml, pagePath, PAGE_META[pagePath], false))
+    if (/^\/paper\/[^/]+(\/[a-z-]+)?$/.test(pagePath)) return res.type('html').send(renderIndex(indexHtml, pagePath, null, true))
+    res
+      .status(404)
+      .type('html')
+      .send(renderIndex(indexHtml, pagePath, { title: 'Page not found | Scholarly', description: 'This page does not exist.' }, true))
+  })
 }
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }))
 

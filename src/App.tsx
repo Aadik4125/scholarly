@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import UploadPage from './pages/UploadPage'
 import AppLayout from './components/AppLayout'
 import OverviewPage from './pages/OverviewPage'
@@ -9,6 +9,10 @@ import SimilarityPage from './pages/SimilarityPage'
 import NoveltyPage from './pages/NoveltyPage'
 import VersionsPage from './pages/VersionsPage'
 import AiContentPage from './pages/AiContentPage'
+import AboutPage from './pages/AboutPage'
+import PrivacyPage from './pages/PrivacyPage'
+import TermsPage from './pages/TermsPage'
+import NotFoundPage from './pages/NotFoundPage'
 import { ThemeProvider } from './hooks/useTheme'
 import { ToastProvider } from './hooks/useToast'
 import { SessionFileProvider } from './hooks/useSessionFile'
@@ -35,7 +39,10 @@ export default function App() {
                   <Route path="novelty" element={<NoveltyPage />} />
                   <Route path="versions" element={<VersionsPage />} />
                 </Route>
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="/about" element={<AboutPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="*" element={<NotFoundPage />} />
               </Routes>
               <FeedbackButton />
             </BrowserRouter>

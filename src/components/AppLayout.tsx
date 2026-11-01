@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useTheme } from '../hooks/useTheme'
 import { CurrentPaperProvider, useCurrentPaper } from '../hooks/useCurrentPaper'
+import SiteFooter from './SiteFooter'
 
 const navItems = [
   { to: '', label: 'Overview', icon: LayoutDashboard, end: true },
@@ -148,6 +149,7 @@ function AppLayoutInner({ paperId }: { paperId: string }) {
           </AnimatePresence>
         )}
       </main>
+      <SiteFooter />
     </div>
   )
 }

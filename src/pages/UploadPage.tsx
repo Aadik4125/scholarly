@@ -22,6 +22,8 @@ import AnalysisProgressPanel from '../components/AnalysisProgressPanel'
 import { savePaper, listPapers, deletePaper, type PaperSummary } from '../lib/paperDb'
 import StickyTag from '../components/StickyTag'
 import Polaroid from '../components/Polaroid'
+import SiteFooter from '../components/SiteFooter'
+import { track } from '../lib/analytics'
 
 // Uploading a real file runs the actual analysis pipeline: text is extracted in the
 // browser, then sent to the backend (/api/analyze) where Claude finds contradictions and
@@ -79,6 +81,10 @@ export default function UploadPage() {
 
   const handleRealFile = useCallback(
     async (file: File) => {
+      track('upload_start', {
+        file_type: (file.name.split('.').pop() || '').toLowerCase(),
+        file_size_kb: Math.round(file.size / 1024),
+      })
       setSessionFile(file)
       setFileName(file.name)
       setIsRealRun(true)
@@ -93,6 +99,9 @@ export default function UploadPage() {
         const paper = await analyzePaperWithAI(file, onStage, setProgress)
         setStepIndex(steps.length)
         const id = await savePaper(file, paper)
+        // Real uploads only; the sample paper sends sample_paper_open instead. This is the
+        // Google Ads conversion, so it fires once the dashboard is ready to open.
+        track('analysis_complete', { page_count: paper.pageCount, word_count: paper.wordCount })
         navigate(`/paper/${id}`)
       } catch (err) {
         console.error(err)
@@ -105,6 +114,7 @@ export default function UploadPage() {
     [setSessionFile, navigate, push],
   )
   const handleSample = useCallback(() => {
+    track('sample_paper_open')
     setSessionFile(null)
     runDemoProcessing('dropout-prediction-draft3.pdf')
   }, [setSessionFile, runDemoProcessing])
@@ -312,6 +322,7 @@ export default function UploadPage() {
           </Polaroid>
         </motion.div>
       </main>
+      <SiteFooter />
     </div>
   )
 }

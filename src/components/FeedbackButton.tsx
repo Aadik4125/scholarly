@@ -2,7 +2,7 @@ import { MessageSquareHeart } from 'lucide-react'
 
 // Temporary, for the friends-and-testers round. Paste the Google Form link here; the button
 // stays hidden while it's empty. Delete this file and its line in App.tsx to remove it.
-const FEEDBACK_URL = 'https://forms.gle/7zAZzMAy8hEjt4UbA'
+export const FEEDBACK_URL = 'https://forms.gle/7zAZzMAy8hEjt4UbA'
 
 export default function FeedbackButton() {
   if (!FEEDBACK_URL) return null

@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /paper/
+
+Sitemap: https://scholar.click/sitemap.xml
