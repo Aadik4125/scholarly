@@ -13,6 +13,7 @@ import { ThemeProvider } from './hooks/useTheme'
 import { ToastProvider } from './hooks/useToast'
 import { SessionFileProvider } from './hooks/useSessionFile'
 import BackgroundDoodles from './components/doodles/BackgroundDoodles'
+import FeedbackButton from './components/FeedbackButton'
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+              <FeedbackButton />
             </BrowserRouter>
           </div>
         </SessionFileProvider>
