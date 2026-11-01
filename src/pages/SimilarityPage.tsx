@@ -26,7 +26,7 @@ export default function SimilarityPage() {
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
           <p className="text-sm text-ink-on-sticky">
             <span className="font-bold">{corpusChecked ? 'Similarity check incomplete. ' : 'Similarity check failed. '}</span>
-            {paper.similarityWarning} Fix the issue and re-analyze the paper for a full score.
+            {paper.similarityWarning} Try re-analyzing later for a full score.
           </p>
         </div>
       )}

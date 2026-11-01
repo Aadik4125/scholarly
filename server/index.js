@@ -576,7 +576,7 @@ const PRIVATE_RANGES = new net.BlockList()
 for (const [addr, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) {
   PRIVATE_RANGES.addSubnet(addr, bits, 'ipv4')
 }
-for (const [addr, bits] of [['::', 127], ['::ffff:0:0', 96], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['64:ff9b::', 96]]) {
+for (const [addr, bits] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['64:ff9b::', 96]]) {
   PRIVATE_RANGES.addSubnet(addr, bits, 'ipv6')
 }
 
@@ -703,7 +703,7 @@ async function checkExternalSimilarity(sections) {
   const sampled = spreadEvenly(chunks, SEMANTIC_PASSAGES)
   const coreSampled = new Set(spreadEvenly(sampled, CORE_PASSAGES))
 
-  const failures = { OpenAlex: { count: 0, lastError: '' }, CORE: { count: 0, lastError: '' } }
+  const failures = { OpenAlex: { count: 0, lastError: '' }, CORE: { count: 0, lastError: '' }, OpenAI: { count: 0, lastError: '' } }
   const fail = (name, err, n = 1) => {
     failures[name].count += n
     failures[name].lastError = err?.message || String(err)
@@ -769,7 +769,7 @@ async function checkExternalSimilarity(sections) {
         }
       }
     } catch (err) {
-      console.error('[server] embedding a passage for external similarity failed, continuing:', err.message)
+      fail('OpenAI', err)
     }
     return { searched: true }
   }
@@ -826,6 +826,10 @@ async function checkExternalSimilarity(sections) {
     .filter(([, f]) => f.count > 0)
     .map(([name, f]) => {
       console.error(`[server] ${name} had ${f.count} failed lookups. Last error:`, f.lastError)
+      // Without embeddings only word-for-word copying can be found, which reworded text slips past.
+      if (name === 'OpenAI') {
+        return 'The meaning-based comparison was unavailable, so reworded (paraphrased) text could not be checked. This score only reflects word-for-word matches.'
+      }
       const hint = /OpenAlex 429/.test(f.lastError) && /budget/i.test(f.lastError)
         ? ' — the daily OpenAlex budget is used up (it resets at midnight UTC); check OPENALEX_API_KEY in .env.'
         : `: ${f.lastError}`
