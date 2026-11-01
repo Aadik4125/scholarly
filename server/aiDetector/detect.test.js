@@ -12,7 +12,7 @@ writeFileSync(
   JSON.stringify({ type: 'tfidf_lr', version: 'test-model', sublinear_tf: true, terms: ['w:delve'], idf: [1], coef: [8], intercept: -4 }),
 )
 process.env.AI_DETECT_MODEL_DIR = dir
-const { detect, detectorStatus, loadDetector } = await import('./index.js')
+const { detect, detectMany, detectorStatus, loadDetector, spreadOrder } = await import('./index.js')
 const { windows } = await import('./text.js')
 await loadDetector()
 
@@ -35,7 +35,23 @@ test('window budget truncates long input', async () => {
   const text = Array.from({ length: 50 }, (_, i) => `Sentence number ${i}.`).join(' ')
   const res = await detect(text, { windows: 5, stride: 1 })
   assert.equal(res.truncated, true)
-  assert.equal(res.sentence_scores.length, 7) // windows 0..4 cover sentences 0..6
+  // The 5 windows are spread over the text (windows 0, 32, 16, 8, 40), not the first five.
+  assert.equal(res.sentence_scores.length, 15)
+  assert.ok(res.sentence_scores.at(-1).start > text.length * 0.8)
+})
+
+test('spreadOrder: every prefix is spread across the range', () => {
+  assert.deepEqual(spreadOrder(8), [0, 4, 2, 6, 1, 5, 3, 7])
+  assert.deepEqual([...spreadOrder(5)].sort(), [0, 1, 2, 3, 4])
+})
+
+test('a cut-off still samples every section', async () => {
+  const section = (n) => Array.from({ length: 30 }, (_, i) => `Section ${n} sentence ${i}.`).join(' ')
+  const results = await detectMany([section(1), section(2), section(3)], { windows: 6, stride: 1 })
+  for (const r of results) {
+    assert.ok(r.sentence_scores.length > 0)
+    assert.equal(r.truncated, true)
+  }
 })
 
 test('stride skips overlap but still covers every sentence', async () => {

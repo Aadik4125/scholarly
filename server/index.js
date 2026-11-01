@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
-import { detect as localDetect, detectorStatus, loadDetector } from './aiDetector/index.js'
+import { detectMany as localDetect, detectorStatus, loadDetector } from './aiDetector/index.js'
 
 const PORT = process.env.PORT || 8787
 
@@ -817,12 +817,16 @@ async function checkAiContent(sections) {
       windows: Number(process.env.AI_DETECT_MAX_WINDOWS || 4000),
       deadline: Date.now() + Number(process.env.AI_DETECT_TIME_LIMIT_S || 90) * 1000,
     }
-    for (const item of items) {
-      if (budget.windows <= 0 || budget.timedOut) break
-      const result = await localDetect(item.text, budget)
-      if (result.sentence_scores.length) results.push({ ...item, result })
+    // Sections are scored together, spread evenly, so a cut-off still samples the whole paper.
+    const scored = await localDetect(items.map((i) => i.text), budget)
+    items.forEach((item, n) => {
+      if (scored[n].sentence_scores.length) results.push({ ...item, result: scored[n] })
+    })
+    if (scored.some((r) => r.truncated)) {
+      const covered = scored.reduce((n, r) => n + r.sentence_scores.reduce((m, s) => m + s.end - s.start, 0), 0)
+      const total = items.reduce((n, i) => n + i.text.length, 0)
+      warning = `To keep the wait short, ${Math.round((covered / total) * 100)}% of the paper was checked, sampled evenly from every section.`
     }
-    if (budget.windows <= 0 || budget.timedOut) warning = 'The paper was too long to check completely in time, so only its first part was scored.'
   }
   // Sapling accepts up to 10 texts per request; batches run one after another to stay inside
   // its per-2-minute character window.
@@ -967,6 +971,18 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
         if (streaming) send({ type: 'done', check, seconds })
       })
 
+    // AI detection is CPU-heavy. On a small shared server, running it alongside the web lookups
+    // starves them until they time out, so it starts once those lookups have finished. The
+    // Claude calls only wait on the network, so they run alongside everything.
+    const similarity = timed('similarity', 'external similarity', checkExternalSimilarity(sections))
+    const repetition = timed('repetition', 'internal repetition', checkSelfSimilarity(sections))
+    const aiContentAfterLookups = Promise.allSettled([similarity, repetition]).then(() =>
+      timed('aiContent', 'AI-content detection', checkAiContent(sections).catch((err) => {
+        console.error('[server] AI-content detection crashed, continuing without it:', err)
+        return { checked: false, aiPercent: 0, sections: [], warning: 'The AI-content check failed unexpectedly.' }
+      })),
+    )
+
     const [findings, writing, externalSimilarity, selfSimilarityMatches, aiContent] = await Promise.all([
       timed('consistency', 'consistency & novelty (Sonnet)', callTool({
         model: SONNET,
@@ -982,12 +998,9 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
       })),
-      timed('similarity', 'external similarity', checkExternalSimilarity(sections)),
-      timed('repetition', 'internal repetition', checkSelfSimilarity(sections)),
-      timed('aiContent', 'AI-content detection', checkAiContent(sections).catch((err) => {
-        console.error('[server] AI-content detection crashed, continuing without it:', err)
-        return { checked: false, aiPercent: 0, sections: [], warning: 'The AI-content check failed unexpectedly.' }
-      })),
+      similarity,
+      repetition,
+      aiContentAfterLookups,
     ])
 
     // Defaults guard against a truncated tool call — one missing list shouldn't fail the analysis.

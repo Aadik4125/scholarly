@@ -87,40 +87,76 @@ export function detectorStatus() {
 // the budget's deadline, so a slow CPU can't stall the rest of the analysis.
 const CHUNK = 16
 
-/** Scores one block of whitespace-collapsed text. Offsets index into `text` as given.
- *  budget: { windows, deadline? } shared across calls; `deadline` is a Date.now() timestamp
- *  after which scoring stops (budget.timedOut is then set). */
-export async function detect(text, budget = { windows: MAX_WINDOWS }) {
+/** 0..n-1 in an order where every prefix is spread evenly over the range (bit-reversal):
+ *  0, n/2, n/4, 3n/4, … So if scoring stops early, what was scored covers the whole paper. */
+export function spreadOrder(n) {
+  let bits = 0
+  while (1 << bits < n) bits++
+  const reverse = (x) => {
+    let r = 0
+    for (let b = 0; b < bits; b++) r = (r << 1) | ((x >> b) & 1)
+    return r
+  }
+  return Array.from({ length: n }, (_, i) => i).sort((a, b) => reverse(a) - reverse(b))
+}
+
+/** Scores several blocks of whitespace-collapsed text (e.g. a paper's sections) together.
+ *  Windows from all blocks are scored in spreadOrder, so when the budget runs out the scored
+ *  part is spread evenly across every block rather than covering only the first ones.
+ *  budget: { windows, deadline?, stride? }; `deadline` is a Date.now() timestamp after which
+ *  scoring stops (budget.timedOut is then set). Offsets index into each text as given. */
+export async function detectMany(texts, budget = { windows: MAX_WINDOWS }) {
   await loadDetector()
   if (!detector) throw new Error(loadError?.message || 'AI detector not loaded')
-  const spans = sentenceSpans(text)
-  const all = windows(spans.length, undefined, budget.stride ?? STRIDE)
-  const wanted = all.slice(0, Math.max(0, budget.windows))
-  const texts = wanted.map(([i, j]) => text.slice(spans[i][0], spans[j - 1][1]))
-  const scores = []
-  for (let c = 0; c < texts.length; c += CHUNK) {
+  const blocks = texts.map((text) => {
+    const spans = sentenceSpans(text)
+    return { text, spans, wins: windows(spans.length, undefined, budget.stride ?? STRIDE) }
+  })
+  const all = blocks.flatMap((b, bi) => b.wins.map((w) => ({ bi, w })))
+  const order = spreadOrder(all.length).slice(0, Math.max(0, budget.windows))
+
+  const scores = new Map() // index into `all` -> score
+  for (let c = 0; c < order.length; c += CHUNK) {
     if (budget.deadline && Date.now() > budget.deadline) {
       budget.timedOut = true
       break
     }
-    scores.push(...(await detector.scoreWindows(texts.slice(c, c + CHUNK))))
+    const idx = order.slice(c, c + CHUNK)
+    const chunkTexts = idx.map((k) => {
+      const { bi, w: [i, j] } = all[k]
+      const { text, spans } = blocks[bi]
+      return text.slice(spans[i][0], spans[j - 1][1])
+    })
+    const got = await detector.scoreWindows(chunkTexts)
+    idx.forEach((k, n) => scores.set(k, got[n]))
     await new Promise((r) => setImmediate(r))
   }
-  const ws = wanted.slice(0, scores.length)
-  budget.windows -= ws.length
+  budget.windows -= scores.size
 
-  const sum = new Float64Array(spans.length)
-  const cnt = new Float64Array(spans.length)
-  ws.forEach(([i, j], w) => {
-    for (let k = i; k < j; k++) {
-      sum[k] += scores[w]
-      cnt[k]++
+  const sums = blocks.map((b) => ({ sum: new Float64Array(b.spans.length), cnt: new Float64Array(b.spans.length), win: [] }))
+  for (const [k, score] of scores) {
+    const { bi, w: [i, j] } = all[k]
+    for (let s = i; s < j; s++) {
+      sums[bi].sum[s] += score
+      sums[bi].cnt[s]++
+    }
+    sums[bi].win.push(score)
+  }
+  return blocks.map((b, bi) => {
+    const { sum, cnt, win } = sums[bi]
+    const sentence_scores = []
+    b.spans.forEach(([start, end], s) => {
+      if (cnt[s]) sentence_scores.push({ start, end, score: sum[s] / cnt[s] })
+    })
+    return {
+      ai_fraction: win.length ? win.reduce((x, y) => x + y, 0) / win.length : null,
+      sentence_scores,
+      truncated: win.length < b.wins.length,
     }
   })
-  const sentence_scores = []
-  spans.forEach(([start, end], k) => {
-    if (cnt[k]) sentence_scores.push({ start, end, score: sum[k] / cnt[k] })
-  })
-  const mean = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
-  return { ai_fraction: mean, sentence_scores, truncated: ws.length < all.length }
+}
+
+/** Scores one block of whitespace-collapsed text. Offsets index into `text` as given. */
+export async function detect(text, budget = { windows: MAX_WINDOWS }) {
+  return (await detectMany([text], budget))[0]
 }
