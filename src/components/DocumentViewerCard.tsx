@@ -37,11 +37,13 @@ export default function DocumentViewerCard() {
     setDocxLoading(true)
     ;(async () => {
       try {
-        const mammoth = await import('mammoth')
+        const [mammoth, { default: DOMPurify }] = await Promise.all([import('mammoth'), import('dompurify')])
         const res = await fetch(displayUrl)
         const buffer = await res.arrayBuffer()
         const { value } = await mammoth.convertToHtml({ arrayBuffer: buffer })
-        if (!cancelled) setDocxHtml(value)
+        // A .docx can carry links like javascript:…, so the converted HTML is sanitized
+        // before it's shown on the page.
+        if (!cancelled) setDocxHtml(DOMPurify.sanitize(value))
       } catch {
         if (!cancelled) setDocxError(true)
       } finally {
