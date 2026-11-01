@@ -138,6 +138,16 @@ function nextId(prefix) {
   return `${prefix}-${Date.now()}-${idCounter}`
 }
 
+// USD per million tokens: [input, output]. Cache writes cost 1.25x input, cache reads 0.1x.
+const PRICES = { [SONNET]: [2, 10], [HAIKU]: [0.1, 0.5] }
+function logCost(model, label, u) {
+  const [inP, outP] = PRICES[model] || [0, 0]
+  const cw = u.cache_creation_input_tokens || 0
+  const cr = u.cache_read_input_tokens || 0
+  const usd = (u.input_tokens * inP + cw * inP * 1.25 + cr * inP * 0.1 + u.output_tokens * outP) / 1e6
+  console.log(`[cost] ${label} ${model}: in=${u.input_tokens} cacheWrite=${cw} cacheRead=${cr} out=${u.output_tokens} ≈ $${usd.toFixed(4)}`)
+}
+
 // `cachedText` goes first and is marked for prompt caching, so repeat requests that share it
 // (e.g. several questions about the same paper) pay ~10% of the normal input price for it.
 async function callTool({ model, system, userText, cachedText, tool, maxTokens = 16000 }) {
@@ -153,6 +163,7 @@ async function callTool({ model, system, userText, cachedText, tool, maxTokens =
     tool_choice: { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content }],
   })
+  logCost(model, tool.name, response.usage)
   if (response.stop_reason === 'refusal') throw new Error(`${model} declined the request (safety refusal)`)
   const block = response.content.find((b) => b.type === 'tool_use')
   if (!block) throw new Error('Model did not return a structured tool call')
