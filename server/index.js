@@ -27,7 +27,7 @@ const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: proces
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
 
 const SONNET = 'claude-sonnet-5'
-const HAIKU = 'claude-haiku-4-5-20251001'
+const HAIKU = 'claude-haiku-5-5'
 const EMBEDDING_MODEL = 'text-embedding-3-small'
 const MAX_SENTENCES = 800
 // Sentence pairs at or above this cosine similarity are treated as repeated text.
@@ -138,16 +138,22 @@ function nextId(prefix) {
   return `${prefix}-${Date.now()}-${idCounter}`
 }
 
-async function callTool({ model, system, userText, tool, maxTokens = 16000 }) {
+// `cachedText` goes first and is marked for prompt caching, so repeat requests that share it
+// (e.g. several questions about the same paper) pay ~10% of the normal input price for it.
+async function callTool({ model, system, userText, cachedText, tool, maxTokens = 16000 }) {
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY is not set in .env — add it and restart the server')
+  const content = cachedText
+    ? [{ type: 'text', text: cachedText, cache_control: { type: 'ephemeral' } }, { type: 'text', text: userText }]
+    : userText
   const response = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system,
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
-    messages: [{ role: 'user', content: userText }],
+    messages: [{ role: 'user', content }],
   })
+  if (response.stop_reason === 'refusal') throw new Error(`${model} declined the request (safety refusal)`)
   const block = response.content.find((b) => b.type === 'tool_use')
   if (!block) throw new Error('Model did not return a structured tool call')
   // A reply cut off at max_tokens arrives as a tool call with its later fields missing.
@@ -1182,7 +1188,8 @@ app.post('/api/ask', askPerIp, askDaily, async (req, res) => {
     const answer = await callTool({
       model: SONNET,
       system: ASK_SYSTEM,
-      userText: `<paper title="${safeTitle.replace(/"/g, "'")}" file="${safeFile.replace(/"/g, "'")}">\n${clip(fullText)}\n</paper>\n\nQuestion: ${question.trim()}`,
+      cachedText: `<paper title="${safeTitle.replace(/"/g, "'")}" file="${safeFile.replace(/"/g, "'")}">\n${clip(fullText)}\n</paper>`,
+      userText: `Question: ${question.trim()}`,
       tool: answerTool,
       maxTokens: 1500,
     })
