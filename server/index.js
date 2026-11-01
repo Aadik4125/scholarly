@@ -923,36 +923,68 @@ async function checkSelfSimilarity(sections) {
   }
 }
 
+// How long recent analyses took on this server, for the upload page's time estimate. Run time
+// depends mostly on the server's CPU and the paper's length, so recent runs on the same server
+// are the best predictor. Kept in memory; resets on restart.
+const recentRuns = []
+const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+
+function estimateSeconds(chars) {
+  if (!recentRuns.length) return 90
+  const typical = median(recentRuns.map((r) => r.seconds))
+  const sizeRatio = chars / Math.max(1, median(recentRuns.map((r) => r.chars)))
+  return Math.round(Math.min(300, Math.max(20, typical * Math.min(1.6, Math.max(0.6, sizeRatio)))))
+}
+
+function recordRun(chars, seconds) {
+  recentRuns.push({ chars, seconds })
+  if (recentRuns.length > 10) recentRuns.shift()
+}
+
 app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
+  // With `Accept: application/x-ndjson` the response streams one JSON object per line: a
+  // "start" event with the time estimate, a "done" event as each check finishes, then the
+  // "result" (or an "error"). Otherwise it's a single JSON response, as before.
+  const streaming = (req.get('accept') || '').includes('application/x-ndjson')
+  const send = (event) => res.write(JSON.stringify(event) + '\n')
   try {
     const { fileName, fullText, sections } = req.body
     if (!fullText || !Array.isArray(sections)) {
       return res.status(400).json({ error: 'fullText and sections are required' })
     }
     const sectionText = clip(renderSections(sections))
+    const chars = sections.reduce((n, s) => n + (s.text?.length || 0), 0)
 
     const started = Date.now()
-    const timed = (label, promise) =>
-      promise.finally(() => console.log(`[server] ${label} finished in ${((Date.now() - started) / 1000).toFixed(1)}s`))
+    if (streaming) {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' })
+      send({ type: 'start', estimateSeconds: estimateSeconds(chars) })
+    }
+    const timed = (check, label, promise) =>
+      promise.finally(() => {
+        const seconds = Math.round((Date.now() - started) / 100) / 10
+        console.log(`[server] ${label} finished in ${seconds.toFixed(1)}s`)
+        if (streaming) send({ type: 'done', check, seconds })
+      })
 
     const [findings, writing, externalSimilarity, selfSimilarityMatches, aiContent] = await Promise.all([
-      timed('consistency & novelty (Sonnet)', callTool({
+      timed('consistency', 'consistency & novelty (Sonnet)', callTool({
         model: SONNET,
         system:
           'You are an academic integrity and research-quality reviewer. You read a student/researcher paper and find REAL internal contradictions (conflicting numbers, dataset sizes, model names, methodology claims) and assess novelty against general knowledge of the field. Be conservative: only report issues you are confident about, grounded in exact quotes from the text. Do not report repeated or copied text as a contradiction — repetition is checked separately. If the paper is clean, return an empty array rather than inventing issues.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: findingsTool,
       })),
-      timed('writing & citations (Haiku)', callTool({
+      timed('writing', 'writing & citations (Haiku)', callTool({
         model: HAIKU,
         system:
           'You are a writing-clarity editor for academic papers. Find real clarity/concision/tone issues and strong claims lacking citations. Always flag informal contractions (don\'t, can\'t, it\'s, doesn\'t) and filler phrases (a lot of, kind of, really) as tone or concision issues. Preserve numbers, citations, and technical meaning. Be conservative otherwise — only flag things genuinely worth fixing. "suggested" must always be the literal replacement text to substitute for "original", verbatim — never a meta-instruction like "Delete this sentence" or "Rephrase for clarity". If the right fix is to delete the sentence entirely, set "suggested" to an empty string.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
       })),
-      timed('external similarity', checkExternalSimilarity(sections)),
-      timed('internal repetition', checkSelfSimilarity(sections)),
-      timed('AI-content detection', checkAiContent(sections).catch((err) => {
+      timed('similarity', 'external similarity', checkExternalSimilarity(sections)),
+      timed('repetition', 'internal repetition', checkSelfSimilarity(sections)),
+      timed('aiContent', 'AI-content detection', checkAiContent(sections).catch((err) => {
         console.error('[server] AI-content detection crashed, continuing without it:', err)
         return { checked: false, aiPercent: 0, sections: [], warning: 'The AI-content check failed unexpectedly.' }
       })),
@@ -964,7 +996,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
     const citationGaps = (writing.citationGaps ?? []).map((g) => ({ id: nextId('cg'), ...g }))
     const noveltyPoints = (findings.noveltyPoints ?? []).map((n) => ({ id: nextId('np'), ...n }))
 
-    res.json({
+    const data = {
       consistencyIssues,
       writingSuggestions,
       citationGaps,
@@ -976,10 +1008,23 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       similaritySources: externalSimilarity.similaritySources,
       similarityWarning: externalSimilarity.similarityWarning,
       aiContent,
-    })
+    }
+    recordRun(chars, (Date.now() - started) / 1000)
+    if (streaming) {
+      send({ type: 'result', data })
+      res.end()
+    } else {
+      res.json(data)
+    }
   } catch (err) {
     console.error('[server] /api/analyze failed:', err)
-    res.status(500).json({ error: err.message || 'Analysis failed' })
+    const error = err.message || 'Analysis failed'
+    if (res.headersSent) {
+      send({ type: 'error', error })
+      res.end()
+    } else {
+      res.status(500).json({ error })
+    }
   }
 })
 

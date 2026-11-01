@@ -17,7 +17,8 @@ import {
 import { useTheme } from '../hooks/useTheme'
 import { useSessionFile } from '../hooks/useSessionFile'
 import { useToast } from '../hooks/useToast'
-import { analyzePaperWithAI } from '../lib/aiEngine'
+import { analyzePaperWithAI, type AnalysisProgress } from '../lib/aiEngine'
+import AnalysisProgressPanel from '../components/AnalysisProgressPanel'
 import { savePaper, listPapers, deletePaper, type PaperSummary } from '../lib/paperDb'
 import StickyTag from '../components/StickyTag'
 import Polaroid from '../components/Polaroid'
@@ -44,6 +45,10 @@ export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false)
   const [fileName, setFileName] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(-1)
+  // Real uploads show live progress from the server; the sample paper keeps the simple step list.
+  const [isRealRun, setIsRealRun] = useState(false)
+  const [progress, setProgress] = useState<AnalysisProgress>({ estimateSeconds: null, done: {} })
+  const [serverStartedAt, setServerStartedAt] = useState<number | null>(null)
 
   const [papers, setPapers] = useState<PaperSummary[]>([])
 
@@ -62,6 +67,7 @@ export default function UploadPage() {
   const runDemoProcessing = useCallback(
     (displayName: string) => {
       setFileName(displayName)
+      setIsRealRun(false)
       setStepIndex(0)
       steps.forEach((_, i) => {
         setTimeout(() => setStepIndex(i + 1), 450 + i * 420)
@@ -75,9 +81,16 @@ export default function UploadPage() {
     async (file: File) => {
       setSessionFile(file)
       setFileName(file.name)
+      setIsRealRun(true)
+      setProgress({ estimateSeconds: null, done: {} })
+      setServerStartedAt(null)
       setStepIndex(0)
       try {
-        const paper = await analyzePaperWithAI(file, setStepIndex)
+        const onStage = (stage: number) => {
+          setStepIndex(stage)
+          if (stage === 1) setServerStartedAt(Date.now())
+        }
+        const paper = await analyzePaperWithAI(file, onStage, setProgress)
         setStepIndex(steps.length)
         const id = await savePaper(file, paper)
         navigate(`/paper/${id}`)
@@ -85,6 +98,7 @@ export default function UploadPage() {
         console.error(err)
         push(err instanceof Error ? err.message : 'Analysis failed. Check the server and API keys.', 'neutral')
         setFileName(null)
+        setIsRealRun(false)
         setStepIndex(-1)
       }
     },
@@ -208,6 +222,9 @@ export default function UploadPage() {
                 </div>
                 <p className="text-sm font-bold text-ink">{fileName}</p>
 
+                {isRealRun ? (
+                  <AnalysisProgressPanel stage={stepIndex} progress={progress} serverStartedAt={serverStartedAt} />
+                ) : (
                 <div className="flex w-full flex-col gap-2.5">
                   {steps.map((label, i) => {
                     const done = stepIndex > i
@@ -226,6 +243,7 @@ export default function UploadPage() {
                     )
                   })}
                 </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

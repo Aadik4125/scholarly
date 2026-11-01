@@ -24,26 +24,72 @@ interface AnalyzeResponse {
   aiContent?: Paper['aiContent']
 }
 
+/** The server-side checks, in the order the upload page lists them. */
+export const ANALYSIS_CHECKS = ['consistency', 'writing', 'similarity', 'repetition', 'aiContent'] as const
+export type AnalysisCheck = (typeof ANALYSIS_CHECKS)[number]
+
+export interface AnalysisProgress {
+  /** The server's estimate of the total run time, from recent analyses; null until it arrives. */
+  estimateSeconds: number | null
+  /** Checks that have finished, with seconds since the request started. */
+  done: Partial<Record<AnalysisCheck, number>>
+}
+
+type StreamEvent =
+  | { type: 'start'; estimateSeconds: number }
+  | { type: 'done'; check: AnalysisCheck; seconds: number }
+  | { type: 'result'; data: AnalyzeResponse }
+  | { type: 'error'; error: string }
+
+/** Reads the server's line-by-line progress stream, reporting progress until the result arrives. */
+async function readAnalysisStream(res: Response, onProgress?: (p: AnalysisProgress) => void): Promise<AnalyzeResponse> {
+  if (!res.body || !(res.headers.get('content-type') || '').includes('ndjson')) return res.json()
+  const progress: AnalysisProgress = { estimateSeconds: null, done: {} }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line) as StreamEvent
+      if (event.type === 'result') return event.data
+      if (event.type === 'error') throw new Error(event.error)
+      if (event.type === 'start') progress.estimateSeconds = event.estimateSeconds
+      if (event.type === 'done') progress.done = { ...progress.done, [event.check]: event.seconds }
+      onProgress?.({ ...progress })
+    }
+    if (done) throw new Error('The connection closed before the analysis finished. Please try again.')
+  }
+}
+
 /** Real analysis pipeline: extracts text client-side, then sends it to the backend
  *  (/api/analyze) where Claude finds contradictions and novelty, Claude Haiku checks
  *  writing and citations, OpenAI embeddings flag internal near-duplicate passages, and
  *  (if CORE_API_KEY is configured) passages are checked against the CORE.ac.uk open-access
  *  research corpus for external similarity. */
-export async function analyzePaperWithAI(file: File, onStage?: (stage: number) => void): Promise<Paper> {
+export async function analyzePaperWithAI(
+  file: File,
+  onStage?: (stage: number) => void,
+  onProgress?: (p: AnalysisProgress) => void,
+): Promise<Paper> {
   onStage?.(0)
   const extracted = await extractDocument(file)
 
   onStage?.(1)
   const res = await fetch('/api/analyze', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
     body: JSON.stringify({ fileName: file.name, fullText: extracted.fullText, sections: extracted.sections }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.error || `Analysis request failed (${res.status})`)
   }
-  const data: AnalyzeResponse = await res.json()
+  const data = await readAnalysisStream(res, onProgress)
 
   onStage?.(2)
   const sections: PaperSection[] = extracted.sections.map((s, i) => ({
