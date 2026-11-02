@@ -319,6 +319,14 @@ async function fetchRetry(url, options = {}, retries = 2) {
   }
 }
 
+/** Short, readable detail for a failed API response. Gateways answer errors with whole HTML
+ *  pages, which must never reach the warning shown to users. */
+function errorDetail(status, body) {
+  if (status >= 500) return 'the service was temporarily unavailable'
+  if (/^\s*</.test(body)) return 'unexpected response'
+  return body.slice(0, 200)
+}
+
 function noteCoreRateLimit(res) {
   if (res.status !== 429 && res.headers.get('x-ratelimit-remaining') !== '0') return
   const retryAfter = Date.parse(res.headers.get('x-ratelimit-retry-after') || '')
@@ -337,7 +345,7 @@ async function searchCore(passage) {
   })
   noteCoreRateLimit(res)
   if (res.status === 429) return null
-  if (!res.ok) throw new Error(`CORE ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+  if (!res.ok) throw new Error(`CORE ${res.status}: ${errorDetail(res.status, await res.text().catch(() => ''))}`)
   const data = await res.json()
   return (data.results || []).map((r) => ({
     title: r.title || 'Untitled work',
@@ -369,7 +377,12 @@ async function openAlexWorks(params) {
       await sleep(1000)
       continue
     }
-    throw new Error(`OpenAlex ${res.status}: ${body.slice(0, 200)}`)
+    // 502/503/504: OpenAlex's gateway timed out or is busy, which usually clears in seconds.
+    if (res.status >= 500 && attempt < 2) {
+      await sleep(1500 * 2 ** attempt)
+      continue
+    }
+    throw new Error(`OpenAlex ${res.status}: ${errorDetail(res.status, body)}`)
   }
 }
 
@@ -794,6 +807,16 @@ async function compareAgainstFullTexts(chunks, candidateVotes, onSemanticError) 
  *    (copying) and by meaning (rewording) — the checks that catch text taken from the body of
  *    an open-access paper.
  *  The score is the share of the paper's chunks flagged by any check. */
+/** True for a passage of a reference list rather than prose. A bibliography matches every
+ *  paper that cites the same works, so it is left out of the similarity score, as plagiarism
+ *  checkers usually do. Prose citations rarely combine several of these markers. */
+function looksLikeReferences(text) {
+  const years = (text.match(/\b(19|20)\d{2}[a-z]?\b/g) || []).length
+  const numbered = (text.match(/\[\d{1,3}\]/g) || []).length
+  const venues = (text.match(/\b(doi|arxiv|proceedings|journal|conference|vol\.|pp\.|https?:)/gi) || []).length
+  return (years >= 2 && numbered >= 2) || (years >= 3 && venues >= 2)
+}
+
 async function checkExternalSimilarity(sections) {
   if (!openai) return { checked: false, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: null }
 
@@ -806,10 +829,11 @@ async function checkExternalSimilarity(sections) {
 
   const chunks = []
   for (const s of sections) {
+    if (AI_DETECT_SKIP_HEADING.test(s.heading)) continue // references, acknowledgements
     const words = s.text.split(/\s+/).filter(Boolean)
     for (let i = 0; i < words.length; i += CHUNK_WORDS) {
       const chunkWords = words.slice(i, i + CHUNK_WORDS)
-      if (chunkWords.length < 20) continue
+      if (chunkWords.length < 20 || looksLikeReferences(chunkWords.join(' '))) continue
       const phrases = [pickPhrase(chunkWords, 5, PHRASE_WORDS), pickPhrase(chunkWords, 35, PHRASE_WORDS)].filter(Boolean)
       chunks.push({ words: chunkWords, text: chunkWords.join(' '), phrases: [...new Set(phrases)] })
     }
@@ -819,6 +843,7 @@ async function checkExternalSimilarity(sections) {
   const coreSampled = new Set(spreadEvenly(sampled, CORE_PASSAGES))
 
   const failures = { OpenAlex: { count: 0, lastError: '' }, CORE: { count: 0, lastError: '' }, OpenAI: { count: 0, lastError: '' } }
+  const attempts = { OpenAlex: 0, CORE: 0 }
   const fail = (name, err, n = 1) => {
     failures[name].count += n
     failures[name].lastError = err?.message || String(err)
@@ -830,6 +855,8 @@ async function checkExternalSimilarity(sections) {
 
   const semanticCheck = async (chunk) => {
     const query = distinctiveQuery(chunk.words)
+    attempts.OpenAlex += 1
+    if (coreSampled.has(chunk)) attempts.CORE += 1
     // null = CORE not asked for this passage, or skipped for its rate limit — not a search.
     const [coreOutcome, openAlexOutcome] = await Promise.allSettled([
       coreSampled.has(chunk) ? searchCore(query) : Promise.resolve(null),
@@ -922,6 +949,7 @@ async function checkExternalSimilarity(sections) {
     findPhraseSources(chunks.flatMap((c) => c.phrases)),
     mapPool(sampled, CONCURRENCY, semanticCheck),
   ])
+  attempts.OpenAlex += Math.ceil(chunks.flatMap((c) => c.phrases).length / PHRASE_BATCH)
   if (phraseSearch.failedPhrases.size) fail('OpenAlex', phraseSearch.lastError, Math.ceil(phraseSearch.failedPhrases.size / PHRASE_BATCH))
   // A precise phrase hit is strong evidence, so it outranks papers that only came up in topic
   // searches when choosing which full texts to fetch.
@@ -985,11 +1013,16 @@ async function checkExternalSimilarity(sections) {
       if (name === 'OpenAI') {
         return 'The meaning-based comparison was unavailable, so reworded (paraphrased) text could not be checked. This score only reflects word-for-word matches.'
       }
-      const hint = /OpenAlex 429/.test(f.lastError) && /budget/i.test(f.lastError)
-        ? ' — the daily OpenAlex budget is used up (it resets at midnight UTC); check OPENALEX_API_KEY in .env.'
-        : `: ${f.lastError}`
-      return `${name}: ${f.count} lookup${f.count === 1 ? '' : 's'} failed${hint}`
+      if (/OpenAlex 429/.test(f.lastError) && /budget/i.test(f.lastError)) {
+        return 'The research database has reached its daily search limit, so part of the paper could not be checked.'
+      }
+      // A few failed searches leave the score representative: it is computed over the passages
+      // that were checked. Only warn when a meaningful share went unchecked.
+      const total = Math.max(attempts[name] || 0, f.count)
+      if (f.count / total < 0.15) return null
+      return `${name} did not respond to ${f.count} of ${total} searches (the service was busy), so some passages were not checked.`
     })
+    .filter(Boolean)
 
   // Several chunks can match the same paper; list each paper once, at its strongest match.
   const bestPerSource = new Map()
