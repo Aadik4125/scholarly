@@ -32,8 +32,9 @@ export default function PrivacyPage() {
           to find repeated passages and similarity to published work.
         </li>
         <li>
-          <strong>OpenAlex and CORE</strong>, open scholarly databases, receive short phrases and keywords from the text to
-          search for related published papers. They do not receive the whole paper.
+          <strong>OpenAlex and CORE</strong>, open scholarly databases, receive short phrases, keywords and a sample of
+          short passages (about 60 words each) from the text to search for related published papers. They do not receive
+          the whole paper.
         </li>
         <li>
           <strong>AI-content detection</strong> runs on our own model, on our server. Your text is not sent to a third party for this.

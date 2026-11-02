@@ -35,9 +35,11 @@ const MAX_SENTENCES = 800
 const NEAR_DUPLICATE_THRESHOLD = 0.95
 // Paraphrase threshold for a 60-word passage against a same-sized window of an external
 // abstract. Measured on real data: passages copied from an abstract scored 0.84-0.90; original
-// prose on the same topic scored 0.57-0.68, and number-heavy results text (metrics tables)
-// reached 0.78 against unrelated papers — so 0.80 sits above that, below every true copy.
-const EXTERNAL_MATCH_THRESHOLD = 0.8
+// prose on the same topic scored 0.57-0.68, number-heavy results text reached 0.78 against
+// unrelated papers, and generic AI-written prose on a broad topic reached 0.82 against the
+// closely related abstracts that meaning-based search finds. Copies are also caught by
+// shared 5-word sequences with the abstract, so the meaning bar can sit above generic prose.
+const EXTERNAL_MATCH_THRESHOLD = 0.85
 const CORE_API_BASE = 'https://api.core.ac.uk/v3'
 
 const app = express()
@@ -372,12 +374,14 @@ async function openAlexWorks(params) {
 }
 
 /** Searches OpenAlex's 250M+ work metadata index (every discipline). Abstracts only, no full
- *  text, but far higher rate limits and broader coverage than CORE. Keyless requests share one
+ *  text, but far higher rate limits and broader coverage than CORE. `semantic` matches by
+ *  meaning instead of keywords: given a reworded passage it finds the paper it came from, where
+ *  a keyword search mostly returns unrelated papers that share a few words. Both cost the same. Keyless requests share one
  *  small daily budget per IP address and get a 429 once it's spent, so a free OPENALEX_API_KEY
  *  (openalex.org) is effectively required. Throws on a failed request, like searchCore. */
-async function searchOpenAlex(passage) {
+async function searchOpenAlex(passage, { semantic = false } = {}) {
   const params = new URLSearchParams({
-    search: passage,
+    [semantic ? 'search.semantic' : 'search']: passage,
     per_page: '5',
     select: 'title,authorships,abstract_inverted_index,locations',
   })
@@ -552,6 +556,24 @@ const SHINGLE_WORDS = 5
 // (footnotes, citation markers, split hyphens); original prose on the same topic stays near 0.
 const FULLTEXT_MATCH_THRESHOLD = 0.25
 const FULLTEXT_CANDIDATES = 6
+// Meaning-based full-text comparison: each source's text is cut into overlapping 60-word
+// windows (30-word stride) and every chunk of the upload is compared with them by embedding
+// similarity. Similar meaning alone isn't proof: generic prose on a broad topic ("AI for
+// sustainable cities") scores 0.8-0.9 against many review papers. Reworded copying also
+// follows the source's order — consecutive chunks match consecutive windows — while topical
+// overlap lands on scattered windows. So a chunk only counts when it is part of an ordered run
+// of at least FULLTEXT_MIN_RUN chunks matching the same source. Measured: a reworded copy of
+// "Attention Is All You Need" had 28 of its 30 matching chunks in one ordered run (steps of 1-4
+// windows per chunk, rarely up to 9); an original AI-written paper on a broad topic matched
+// three review papers at 0.75-0.91 but formed no qualifying run, where runs of 3 do occur by
+// chance.
+// 512-dimension embeddings separate these as well as full-size ones at a third of the CPU.
+const FULLTEXT_SEMANTIC_THRESHOLD = 0.75
+const FULLTEXT_MIN_RUN = 4
+const RUN_MAX_CHUNK_GAP = 3 // a run may skip up to 2 unmatched chunks
+const RUN_MAX_WINDOWS_PER_CHUNK = 8 // ~2-4 windows per chunk expected; leaves room for condensing
+const FULLTEXT_EMBED_DIMS = 512
+const FULLTEXT_WINDOWS_PER_SOURCE = 400 // ~12,000 words
 const MAX_PDF_BYTES = 25 * 1024 * 1024
 
 /** Lowercased word tokens with numbers dropped and line-wrap hyphens rejoined ("logis- tics"),
@@ -656,16 +678,84 @@ async function fetchFullText(candidate) {
   return null
 }
 
+async function embedSmall(texts) {
+  const batches = []
+  for (let i = 0; i < texts.length; i += 256) batches.push(texts.slice(i, i + 256))
+  const results = await mapPool(batches, 3, async (input) => {
+    const res = await openai.embeddings.create({ model: EMBEDDING_MODEL, dimensions: FULLTEXT_EMBED_DIMS, input })
+    return res.data.map((d) => Float32Array.from(d.embedding))
+  })
+  return results.flat()
+}
+
+/** Finds chunks that say the same thing as a passage of a source's full text, even when every
+ *  word was changed, and in the same order as the source (see FULLTEXT_MIN_RUN). Returns
+ *  chunk -> { candidate, sim } for the qualifying chunks. */
+async function semanticFullTextMatches(chunks, sources) {
+  const windows = sources.flatMap((source, sourceIndex) =>
+    abstractWindows(source.text, 60, 30)
+      .slice(0, FULLTEXT_WINDOWS_PER_SOURCE)
+      .map((text, position) => ({ sourceIndex, position, text })),
+  )
+  if (!chunks.length || !windows.length) return new Map()
+  const [chunkVecs, windowVecs] = await Promise.all([embedSmall(chunks.map((c) => c.text)), embedSmall(windows.map((w) => w.text))])
+
+  // For every source, each chunk's best-matching window above the threshold.
+  const points = sources.map(() => []) // per source: [{ chunk, position, sim }] in chunk order
+  for (let c = 0; c < chunks.length; c++) {
+    // Give other requests a turn — this loop is the heaviest CPU work in the similarity check.
+    if (c % 20 === 19) await new Promise((resolve) => setImmediate(resolve))
+    const a = chunkVecs[c]
+    const best = sources.map(() => ({ sim: 0, position: -1 }))
+    for (let w = 0; w < windowVecs.length; w++) {
+      const b = windowVecs[w]
+      let dot = 0
+      for (let i = 0; i < a.length; i++) dot += a[i] * b[i]
+      const slot = best[windows[w].sourceIndex]
+      if (dot > slot.sim) {
+        slot.sim = dot
+        slot.position = windows[w].position
+      }
+    }
+    best.forEach((b, s) => {
+      if (b.sim >= FULLTEXT_SEMANTIC_THRESHOLD) points[s].push({ chunk: c, position: b.position, sim: b.sim })
+    })
+  }
+
+  const matches = new Map()
+  points.forEach((pts, s) => {
+    // Longest ordered chain through each point: forward and backward passes, where a step goes
+    // a few chunks ahead and a proportional distance ahead in the source.
+    const follows = (p, q) => {
+      const gap = q.chunk - p.chunk
+      const advance = q.position - p.position
+      return gap >= 1 && gap <= RUN_MAX_CHUNK_GAP && advance >= -1 && advance <= RUN_MAX_WINDOWS_PER_CHUNK * gap
+    }
+    const fwd = pts.map(() => 1)
+    for (let j = 0; j < pts.length; j++) for (let i = 0; i < j; i++) if (follows(pts[i], pts[j])) fwd[j] = Math.max(fwd[j], fwd[i] + 1)
+    const bwd = pts.map(() => 1)
+    for (let i = pts.length - 1; i >= 0; i--) for (let j = i + 1; j < pts.length; j++) if (follows(pts[i], pts[j])) bwd[i] = Math.max(bwd[i], bwd[j] + 1)
+    pts.forEach((p, k) => {
+      if (fwd[k] + bwd[k] - 1 < FULLTEXT_MIN_RUN) return
+      const chunk = chunks[p.chunk]
+      if ((matches.get(chunk)?.sim ?? 0) < p.sim) matches.set(chunk, { candidate: sources[s].candidate, sim: p.sim })
+    })
+  })
+  return matches
+}
+
 /** Ranks every candidate the searches returned by how many chunks pointed at it, fetches full
- *  text for the top few, and returns chunk -> best { source, overlap } above the threshold. */
-async function compareAgainstFullTexts(chunks, candidateVotes) {
+ *  text for the top few, and compares every chunk with them two ways: shared 5-word sequences
+ *  (copying) and meaning (rewording). Returns { exact, meaning } maps of chunk -> best match.
+ *  A failed meaning comparison is reported through onSemanticError; exact matches still count. */
+async function compareAgainstFullTexts(chunks, candidateVotes, onSemanticError) {
   const ranked = [...candidateVotes.values()]
     .filter((v) => (v.candidate.fullText && v.candidate.fullText.length > 2000) || v.candidate.pdfUrls.size > 0)
     .sort((a, b) => b.votes - a.votes || b.bestSim - a.bestSim)
     .slice(0, FULLTEXT_CANDIDATES)
   const texts = await Promise.all(ranked.map((v) => fetchFullText(v.candidate)))
   const sources = ranked
-    .map((v, i) => (texts[i] ? { candidate: v.candidate, shingles: shingleSet(shingleTokens(texts[i])) } : null))
+    .map((v, i) => (texts[i] ? { candidate: v.candidate, text: texts[i], shingles: shingleSet(shingleTokens(texts[i])) } : null))
     .filter(Boolean)
   console.log(`[server] full-text comparison against ${sources.length}/${ranked.length} top candidates:`, sources.map((s) => s.candidate.title))
 
@@ -682,26 +772,34 @@ async function compareAgainstFullTexts(chunks, candidateVotes) {
       }
     }
   }
-  return matches
+  let meaning = new Map()
+  try {
+    meaning = await semanticFullTextMatches(chunks.filter((c) => !matches.has(c)), sources)
+  } catch (err) {
+    onSemanticError(err)
+  }
+  return { exact: matches, meaning }
 }
 
 /** Checks the paper against OpenAlex and CORE three complementary ways:
  *  - Exact phrases, across the WHOLE paper: two 10-word phrases from every 60-word chunk are
  *    looked up in OpenAlex's full-text index, ~1 request per 10 chunks, to find source papers
  *    that topic searches might not surface.
- *  - Semantic, on a sample spread evenly across the paper: each passage's distinctive keywords
- *    find candidate papers, then OpenAI embeddings score the passage against windows of each
- *    candidate's abstract — catching close paraphrase that exact phrases miss. This costs a
- *    search per passage, so it's sampled to stay within OpenAlex's free daily budget.
+ *  - Semantic, on a sample spread evenly across the paper: OpenAlex's meaning-based search finds
+ *    candidate papers for each passage, then OpenAI embeddings score the passage against windows
+ *    of each candidate's abstract. This costs a search per passage, so it's sampled to stay
+ *    within OpenAlex's free daily budget.
  *  - Full text, across the WHOLE paper: the papers those searches return most often have their
- *    full text fetched, and every chunk is compared against it by shared 5-word sequences —
- *    the check that catches copying from the body of an open-access paper.
+ *    full text fetched, and every chunk is compared against it by shared 5-word sequences
+ *    (copying) and by meaning (rewording) — the checks that catch text taken from the body of
+ *    an open-access paper.
  *  The score is the share of the paper's chunks flagged by any check. */
 async function checkExternalSimilarity(sections) {
   if (!openai) return { checked: false, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: null }
 
   const CHUNK_WORDS = 60
-  const SEMANTIC_PASSAGES = 30
+  // Each topic search costs $0.001 of OpenAlex's $1/day free allowance, as does each phrase batch.
+  const SEMANTIC_PASSAGES = 15
   const CORE_PASSAGES = 9
   const PHRASE_WORDS = 10
   const CONCURRENCY = 5
@@ -735,7 +833,11 @@ async function checkExternalSimilarity(sections) {
     // null = CORE not asked for this passage, or skipped for its rate limit — not a search.
     const [coreOutcome, openAlexOutcome] = await Promise.allSettled([
       coreSampled.has(chunk) ? searchCore(query) : Promise.resolve(null),
-      searchOpenAlex(query),
+      // Meaning-based search finds the source of reworded text; keywords are the fallback.
+      searchOpenAlex(chunk.text, { semantic: true }).catch((err) => {
+        if (/budget/i.test(err.message)) throw err
+        return searchOpenAlex(query)
+      }),
     ])
     if (coreOutcome.status === 'rejected') fail('CORE', coreOutcome.reason)
     if (openAlexOutcome.status === 'rejected') fail('OpenAlex', openAlexOutcome.reason)
@@ -747,14 +849,39 @@ async function checkExternalSimilarity(sections) {
     for (const c of found) {
       const key = c.title.toLowerCase().trim()
       const vote = candidateVotes.get(key)
-      if (!vote) candidateVotes.set(key, { candidate: c, votes: 1, bestSim: 0 })
+      if (!vote) candidateVotes.set(key, { candidate: c, votes: 2, bestSim: 0 })
       else {
-        vote.votes += 1
+        vote.votes += 2
         vote.candidate = dedupeCandidates([vote.candidate, c])[0]
       }
     }
     const candidates = found.filter((c) => c.abstract.length > 40)
     if (candidates.length === 0) return { searched: true }
+
+    // Word-for-word copying from an abstract, for papers whose full text isn't open access.
+    const own = shingleSet(shingleTokens(chunk.text))
+    let copied = null
+    if (own.size >= 8) {
+      for (const candidate of candidates) {
+        const theirs = shingleSet(shingleTokens(candidate.abstract))
+        let hits = 0
+        for (const sh of own) if (theirs.has(sh)) hits += 1
+        const overlap = hits / own.size
+        if (overlap >= FULLTEXT_MATCH_THRESHOLD && overlap > (copied?.overlap ?? 0)) copied = { candidate, overlap }
+      }
+    }
+    if (copied) {
+      return {
+        searched: true,
+        source: {
+          title: copied.candidate.title,
+          authors: copied.candidate.authors,
+          matchPercent: Math.round(copied.overlap * 1000) / 10,
+          matchType: 'fulltext',
+          matchedExcerpt: chunk.text,
+        },
+      }
+    }
     try {
       const windows = candidates.flatMap((candidate) =>
         abstractWindows(candidate.abstract, CHUNK_WORDS, CHUNK_WORDS / 2).map((text) => ({ candidate, text })),
@@ -809,8 +936,9 @@ async function checkExternalSimilarity(sections) {
   }
   const semanticByChunk = new Map(sampled.map((c, i) => [c, semanticResults[i]]))
   let fullTextMatches = new Map()
+  let meaningMatches = new Map()
   try {
-    fullTextMatches = await compareAgainstFullTexts(chunks, candidateVotes)
+    ;({ exact: fullTextMatches, meaning: meaningMatches } = await compareAgainstFullTexts(chunks, candidateVotes, (err) => fail('OpenAI', err)))
   } catch (err) {
     console.error('[server] full-text comparison failed, continuing without it:', err.message)
   }
@@ -821,7 +949,8 @@ async function checkExternalSimilarity(sections) {
     const phraseChecked = chunk.phrases.some((p) => !phraseSearch.failedPhrases.has(p))
     const semantic = semanticByChunk.get(chunk)
     const fullText = fullTextMatches.get(chunk)
-    if (!phraseChecked && !semantic?.searched && !fullText) continue
+    const meaning = meaningMatches.get(chunk)
+    if (!phraseChecked && !semantic?.searched && !fullText && !meaning) continue
     checkedChunks += 1
     if (fullText) {
       matched.push({
@@ -830,6 +959,15 @@ async function checkExternalSimilarity(sections) {
         authors: fullText.candidate.authors,
         matchPercent: Math.round(fullText.overlap * 1000) / 10,
         matchType: 'fulltext',
+        matchedExcerpt: chunk.text,
+      })
+    } else if (meaning) {
+      matched.push({
+        id: nextId('sim'),
+        title: meaning.candidate.title,
+        authors: meaning.candidate.authors,
+        matchPercent: Math.round(meaning.sim * 1000) / 10,
+        matchType: 'semantic',
         matchedExcerpt: chunk.text,
       })
     } else if (semantic?.source) {

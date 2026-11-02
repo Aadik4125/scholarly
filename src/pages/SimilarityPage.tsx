@@ -84,8 +84,8 @@ export default function SimilarityPage() {
                   <span
                     title={
                       s.matchType === 'fulltext'
-                        ? 'Share of this passage’s wording found word-for-word in the source’s full text'
-                        : 'Closeness of this passage to the source’s abstract'
+                        ? 'Share of this passage’s wording found word-for-word in the source'
+                        : 'How closely this passage’s meaning matches the source, even if reworded'
                     }
                     className={`ink-border shrink-0 rounded-full px-2.5 py-1 text-xs font-bold text-ink-on-sticky ${
                       s.matchType === 'fulltext' ? 'bg-sticky-pink' : 'bg-sticky-blue'
