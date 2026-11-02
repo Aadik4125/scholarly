@@ -21,6 +21,7 @@ interface AnalyzeResponse {
   overallSimilarityPercent: number
   similaritySources: Paper['similaritySources']
   similarityWarning: string | null
+  similarityBreakdown?: Paper['similarityBreakdown']
   aiContent?: Paper['aiContent']
 }
 
@@ -119,6 +120,7 @@ export async function analyzePaperWithAI(
     selfSimilarityMatches: data.selfSimilarityMatches,
     similarityCorpusChecked: data.similarityCorpusChecked,
     similarityWarning: data.similarityWarning,
+    similarityBreakdown: data.similarityBreakdown,
     aiContent: data.aiContent,
     versions: [
       {

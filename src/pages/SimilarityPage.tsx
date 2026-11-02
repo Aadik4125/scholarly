@@ -16,9 +16,9 @@ export default function SimilarityPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="a secondary signal"
+        eyebrow="checked word for word and by meaning"
         title="Similarity & Citations"
-        description="Provider-abstracted and swappable — not the primary differentiator of this product."
+        description="Your paper compared with 250M+ research papers from OpenAlex and CORE, for copied and reworded passages."
       />
 
       {paper.analysisMode === 'ai' && paper.similarityWarning && (
@@ -65,7 +65,19 @@ export default function SimilarityPage() {
             <div className="mt-5">
               <Meter value={score} />
             </div>
-            <p className="mt-3 text-xs font-semibold text-ink-muted">Across {paper.similaritySources.length} matched sources</p>
+            {paper.similarityBreakdown && (
+              <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold text-ink-on-sticky">
+                <span className="ink-border rounded-full bg-sticky-pink px-2.5 py-1">
+                  {paper.similarityBreakdown.copiedPercent}% word for word
+                </span>
+                <span className="ink-border rounded-full bg-sticky-blue px-2.5 py-1">
+                  {paper.similarityBreakdown.rewordedPercent}% reworded
+                </span>
+              </div>
+            )}
+            <p className="mt-3 text-xs font-semibold text-ink-muted">
+              Across {paper.similaritySources.length} matched {paper.similaritySources.length === 1 ? 'source' : 'sources'}
+            </p>
           </motion.div>
         )}
 
@@ -80,21 +92,39 @@ export default function SimilarityPage() {
                   <div>
                     <p className="text-sm font-bold text-ink">{s.title}</p>
                     <p className="text-xs text-ink-muted">{s.authors}</p>
+                    {s.passageCount && s.passageCount > 1 && (
+                      <p className="mt-1 text-xs font-semibold text-ink-2">
+                        {s.passageCount} passages of your paper match this source
+                      </p>
+                    )}
                   </div>
                   <span
                     title={
                       s.matchType === 'fulltext'
-                        ? 'Share of this passage’s wording found word-for-word in the source'
-                        : 'How closely this passage’s meaning matches the source, even if reworded'
+                        ? 'Share of this passage’s wording found word for word in the source'
+                        : 'This passage restates the source in other words. The number is how close the meaning is.'
                     }
                     className={`ink-border shrink-0 rounded-full px-2.5 py-1 text-xs font-bold text-ink-on-sticky ${
                       s.matchType === 'fulltext' ? 'bg-sticky-pink' : 'bg-sticky-blue'
                     }`}
                   >
-                    {s.matchType === 'fulltext' ? `${s.matchPercent}% text overlap` : `${s.matchPercent}% match`}
+                    {s.matchType === 'fulltext' ? `Word for word · ${s.matchPercent}%` : `Reworded · ${s.matchPercent}% similar`}
                   </span>
                 </div>
-                <p className="mt-2 text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                {s.sourceExcerpt ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl bg-surface-hover p-3">
+                      <p className="mb-1 text-[11px] font-bold tracking-wide text-ink-muted uppercase">Your paper</p>
+                      <p className="text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                    </div>
+                    <div className="rounded-xl bg-surface-hover p-3">
+                      <p className="mb-1 text-[11px] font-bold tracking-wide text-ink-muted uppercase">Source</p>
+                      <p className="text-sm text-ink-2 italic">&ldquo;{s.sourceExcerpt}&rdquo;</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                )}
               </div>
             ))}
             {paper.similaritySources.length === 0 && (
@@ -107,6 +137,13 @@ export default function SimilarityPage() {
               </p>
             )}
           </div>
+          {paper.analysisMode === 'ai' && (
+            <p className="border-t-[1.5px] border-line px-5 py-3 text-xs text-ink-muted">
+              Reworded matches are confirmed by AI reading both passages side by side. Reference lists are not counted.
+              Full papers are compared when they are open access; for others, only the abstract. Websites and other
+              students’ work are not included, so treat this as an early check, not a final verdict.
+            </p>
+          )}
         </div>
       </div>
 
