@@ -24,7 +24,7 @@ from sklearn.preprocessing import StandardScaler
 from ..eval.metrics import classification_report
 from ..features import linguistic
 from ..features.text import normalize
-from .common import ARTIFACTS, load_split, make_windows, print_metrics, save_json, write_results
+from .common import ARTIFACTS, PROCESSED, SPLITS, load_split, make_windows, print_metrics, save_json, write_results
 
 
 def base_scorers(split: str, use_transformer: bool) -> dict:
@@ -87,13 +87,21 @@ def main() -> None:
     ap.add_argument("--split", default="random")
     ap.add_argument("--no-transformer", action="store_true")
     ap.add_argument("--no-features", action="store_true")
+    ap.add_argument("--rebuild", action="store_true", help="recompute the base-score table even if it looks current")
     args = ap.parse_args()
     use_tr = not args.no_transformer
 
     data = load_split(args.split)
     table_path = ARTIFACTS / f"fusion_table_{args.split}.parquet"
     scorers = base_scorers(args.split, use_tr)
-    if table_path.exists() and set(scorers) <= set(pd.read_parquet(table_path, columns=None).columns):
+    # The cached table holds base-model scores, so it is stale as soon as a base model (or the
+    # split it was built from) is newer than the table. Reusing it silently would evaluate the
+    # fusion of models that no longer exist.
+    sources = [ARTIFACTS / f"E1_tfidf_lr_{args.split}.joblib", SPLITS / f"{args.split}.parquet", PROCESSED / "corpus.parquet"]
+    if use_tr:
+        sources.append(ARTIFACTS / f"E3_distilroberta_{args.split}" / "model.safetensors")
+    fresh = table_path.exists() and all(not p.exists() or p.stat().st_mtime <= table_path.stat().st_mtime for p in sources)
+    if fresh and not args.rebuild and set(scorers) <= set(pd.read_parquet(table_path, columns=None).columns):
         table = pd.read_parquet(table_path)
         print(f"reusing {table_path}")
     else:

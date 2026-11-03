@@ -54,6 +54,19 @@ To run every experiment on every split, repeat steps 4–8 with `--split` set to
   Stride 2 is within noise of stride 1 (400 human docs give about ±1.2 points); stride 3 flags more human text, so it isn't the default.
 - **Blending, not out-of-fold.** Fusion and FITRON train on base-model predictions for `val` and are evaluated on `test`. 5-fold out-of-fold training of the transformer would mean five fine-tunes on a laptop, and blending is equally leakage-safe.
 - **FITRON is research-only.** `FITRONModel.fit()` makes its own non-grouped random split, `rank()` retrains on whatever it is given, and TOPSIS scores are relative to the batch. So it can neither be evaluated on a leakage-safe test set as-is nor score one new paper in production. The experiments call its core components (fuzzy profile, tuned decision tree, TOPSIS) under our protocol instead.
+- **Modern generators (v2).** The original corpus stops at GPT-4 / Llama-2 (2023) and its human academic text is abstracts. Measured through the app's own scoring path (`server/aiDetector/eval-app.mjs`), v1 was at chance on text from current models. v2 adds 6,447 paper sections: human sections from pre-2022 papers and the same sections written by Claude 4.5-5.5 and GPT-4o/5 (`detector.data.modern`).
+
+  | 400 docs per set, scored as the app does | v1 | v2 |
+  |---|---|---|
+  | Modern AI caught (Claude/GPT, 7 models) | 33.0% | **84.0%** |
+  | Unseen models caught (Sonnet 5.5, GPT-5.5) | 13.5% | **71.5%** |
+  | Human paper sections wrongly flagged | 20.3% | **1.3%** |
+  | Human arXiv abstracts wrongly flagged | 1.8% | **1.0%** |
+  | Legacy AI caught (2019-23 generators) | 94.0% | 87.5% |
+  | ROC-AUC, modern | 0.499 | **0.983** |
+
+  Legacy recall drops ~6 points: the price of a model that no longer treats formal academic prose as AI.
+
 - **Headline metric:** TPR at 1% FPR, plus the human-academic audit FPR. In an education setting, falsely flagging a human is the expensive error.
 
 ## Shipping a model

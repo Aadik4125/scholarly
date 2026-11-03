@@ -44,8 +44,10 @@ def main() -> None:
     size = (out / "onnx" / "model_quantized.onnx").stat().st_size / 1e6
     print(f"wrote {out} (model {size:.0f} MB)")
 
-    # Expected transformer scores (from the quantized ONNX model, as Node will run it).
-    fixtures_path = APP_MODELS / "parity_fixtures.json"
+    # Expected transformer scores (from the quantized ONNX model, as Node will run it). The
+    # fixtures live beside the model files, i.e. in the parent of --out, so exporting to a
+    # staging directory never touches the deployed one.
+    fixtures_path = out.parent / "parity_fixtures.json"
     if fixtures_path.exists():
         import onnxruntime as ort
 
