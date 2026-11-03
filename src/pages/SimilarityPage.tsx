@@ -149,7 +149,9 @@ export default function SimilarityPage() {
                   )}
                 </ul>
                 <p className="mt-3 text-xs text-ink-muted">
-                  A brand-new or unpublished paper is expected to score 0%: there is nothing published for it to match.
+                  0% means no passage closely matched published research in these databases. Your own paper isn&rsquo;t
+                  in them yet, so it can&rsquo;t match itself, but text taken from other published work would still show
+                  up here.
                 </p>
               </div>
             ) : paper.similaritySources.length === 0 ? (

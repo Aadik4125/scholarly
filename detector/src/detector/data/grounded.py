@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -145,13 +146,35 @@ def _await_batch(batch_id: str) -> None:
 
 
 def _results(batch_id: str) -> dict[str, tuple[str, str]]:
-    """custom_id -> (text, stop_reason) for every succeeded request."""
+    """custom_id -> (text, stop_reason) for every succeeded request.
+
+    The SDK streams the results file, and on a long download that connection sometimes drops
+    ("Bad file descriptor") after the batch has already been paid for. So the file is cached
+    locally on first read, with curl as the fallback fetcher."""
+    cache = OUT / f"{batch_id}.results.jsonl"
+    if not cache.exists():
+        try:
+            with open(cache, "w") as f:
+                for res in _anthropic_client().messages.batches.results(batch_id):
+                    f.write(res.model_dump_json() + "\n")
+        except Exception as err:
+            print(f"  stream failed ({err}); fetching with curl", file=sys.stderr)
+            cache.unlink(missing_ok=True)
+            key = _anthropic_client().api_key
+            rc = subprocess.run(
+                ["curl", "-sfL", "--retry", "3", f"https://api.anthropic.com/v1/messages/batches/{batch_id}/results",
+                 "-H", f"x-api-key: {key}", "-H", "anthropic-version: 2023-06-01", "-o", str(cache)],
+            ).returncode
+            if rc != 0:
+                cache.unlink(missing_ok=True)
+                raise
     out = {}
-    for res in _anthropic_client().messages.batches.results(batch_id):
-        if res.result.type != "succeeded":
+    for line in open(cache):
+        res = json.loads(line)
+        if res["result"]["type"] != "succeeded":
             continue
-        m = res.result.message
-        out[res.custom_id] = (next((b.text for b in m.content if b.type == "text"), ""), m.stop_reason)
+        m = res["result"]["message"]
+        out[res["custom_id"]] = (next((b["text"] for b in m["content"] if b["type"] == "text"), ""), m["stop_reason"])
     return out
 
 
