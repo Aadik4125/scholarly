@@ -11,6 +11,11 @@ import type { AiContentSection } from '../types'
 // >= 0.5; the stronger band just makes the most confident flags stand out.
 const LIKELY = 0.5
 const VERY_LIKELY = 0.8
+// A section counts as "substantially AI-style" at this share of flagged sentences. Sections
+// shorter than this many sentences are left out of that count: a 2-sentence heading block
+// swings between 0% and 100% on a single sentence.
+const SECTION_FLAGGED = 0.4
+const MIN_SECTION_SENTENCES = 4
 
 function sentenceClass(score: number) {
   if (score >= VERY_LIKELY) return 'bg-sticky-pink text-ink-on-sticky'
@@ -44,7 +49,20 @@ export default function AiContentPage() {
 
   const totals = useMemo(() => {
     const sentences = result?.sections.flatMap((s) => s.sentences) ?? []
-    return { total: sentences.length, flagged: sentences.filter((s) => s.score >= LIKELY).length }
+    // One overall percentage hides a short, heavily flagged section behind a long clean one: a
+    // paper whose "Research gap" is entirely flagged still reads ~11% once a numbers-heavy
+    // results section is averaged in. So the sections are summarised separately.
+    const scored = (result?.sections ?? []).filter((x) => x.sentences.length >= MIN_SECTION_SENTENCES)
+    const shares = scored
+      .map((x) => ({ heading: x.heading, share: flaggedCount(x) / x.sentences.length }))
+      .sort((a, b) => b.share - a.share)
+    return {
+      total: sentences.length,
+      flagged: sentences.filter((s) => s.score >= LIKELY).length,
+      sectionsScored: scored.length,
+      sectionsFlagged: shares.filter((x) => x.share >= SECTION_FLAGGED).length,
+      top: shares[0],
+    }
   }, [result])
 
   if (!paper) return null
@@ -122,6 +140,21 @@ export default function AiContentPage() {
           <p className="mt-3 text-xs font-semibold text-ink-muted">
             {totals.flagged} of {totals.total} sentences flagged
           </p>
+
+          {totals.sectionsScored > 0 && (
+            <div className="mt-4 border-t-[1.5px] border-dashed border-line-soft pt-4">
+              <p className="text-sm font-bold text-ink-2">
+                {totals.sectionsFlagged} of {totals.sectionsScored} sections
+              </p>
+              <p className="text-xs text-ink-muted">are mostly AI-style writing</p>
+              {totals.top && totals.top.share >= SECTION_FLAGGED && (
+                <p className="mt-2 text-xs text-ink-2">
+                  Highest: <span className="font-bold">{totals.top.heading}</span> &middot;{' '}
+                  {Math.round(totals.top.share * 100)}% of its sentences
+                </p>
+              )}
+            </div>
+          )}
         </motion.div>
 
         <div className="ink-border card-pop rounded-3xl bg-surface p-6 shadow-[var(--shadow-card)] lg:col-span-2">

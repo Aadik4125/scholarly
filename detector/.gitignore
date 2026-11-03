@@ -1,7 +1,7 @@
 .venv/
-data/
-artifacts/
+/data/
+/artifacts/
 *.egg-info/
 __pycache__/
 .pytest_cache/
-logs/
+/logs/

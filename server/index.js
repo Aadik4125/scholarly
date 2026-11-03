@@ -1289,6 +1289,30 @@ function looksLikeFrontMatter(text) {
   return affiliation && capitalized >= 0.5
 }
 
+/** True for a line that is tabular or numeric rather than prose: a table row (cells joined with
+ *  " | " by the extractor), or a line whose tokens are mostly bare numbers. Scoring these as
+ *  "sentences" dilutes the result — a results section that is largely a printed table reads as
+ *  clean prose and pulls the whole paper's score down. */
+function isNonProseLine(line) {
+  const t = line.trim()
+  if (!t) return true
+  if (t.split('|').length >= 3) return true // table row from a .docx
+  const words = t.split(/\s+/)
+  if (words.length < 3) return true
+  const numeric = words.filter((w) => /^[-+(]?[\d.,]+[%)]?$/.test(w)).length
+  return numeric / words.length >= 0.3
+}
+
+/** A section's prose only, with table rows and numeric lines removed. */
+function proseOnly(text) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !isNonProseLine(line))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function checkAiContent(sections) {
   const useSapling = AI_DETECT_PROVIDER === 'sapling'
   if (useSapling ? !process.env.SAPLING_API_KEY : !detectorStatus().ready) {
@@ -1296,7 +1320,7 @@ async function checkAiContent(sections) {
   }
   const eligible = sections
     .filter((s) => !AI_DETECT_SKIP_HEADING.test(s.heading))
-    .map((s) => ({ heading: s.heading, text: s.text.replace(/\s+/g, ' ').trim() }))
+    .map((s) => ({ heading: s.heading, text: proseOnly(s.text) }))
     .filter((s) => !looksLikeFrontMatter(s.text))
     .filter((s) => s.text.length >= AI_DETECT_MIN_SECTION_CHARS)
   const totalChars = eligible.reduce((n, s) => n + s.text.length, 0)
