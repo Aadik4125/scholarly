@@ -127,7 +127,32 @@ export default function SimilarityPage() {
                 )}
               </div>
             ))}
-            {paper.similaritySources.length === 0 && (
+            {paper.similaritySources.length === 0 && corpusChecked && paper.similarityStats ? (
+              <div className="px-5 py-6">
+                <p className="text-sm font-bold text-ink">No copied or reworded passages found.</p>
+                <p className="mt-1 text-sm text-ink-2">Here is what was checked:</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-2">
+                  <li>{paper.similarityStats.passagesChecked} passages of your paper, word for word and by meaning</li>
+                  <li>{paper.similarityStats.papersFound} related papers found by searching OpenAlex and CORE</li>
+                  {paper.similarityStats.fullTextsCompared.length > 0 && (
+                    <li>
+                      Full text of the {paper.similarityStats.fullTextsCompared.length} closest, compared passage by passage:
+                      <ul className="mt-1 list-[circle] space-y-0.5 pl-5 text-xs text-ink-muted">
+                        {paper.similarityStats.fullTextsCompared.map((t) => (
+                          <li key={t}>{t}</li>
+                        ))}
+                      </ul>
+                    </li>
+                  )}
+                  {paper.similarityStats.rewordingReviewed > 0 && (
+                    <li>{paper.similarityStats.rewordingReviewed} possible rewordings reviewed by AI, none confirmed</li>
+                  )}
+                </ul>
+                <p className="mt-3 text-xs text-ink-muted">
+                  A brand-new or unpublished paper is expected to score 0%: there is nothing published for it to match.
+                </p>
+              </div>
+            ) : paper.similaritySources.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-ink-muted">
                 {corpusChecked
                   ? 'No matching sources found across OpenAlex or CORE.'
@@ -135,7 +160,7 @@ export default function SimilarityPage() {
                     ? 'No sources could be searched.'
                     : 'No similarity provider connected.'}
               </p>
-            )}
+            ) : null}
           </div>
           {paper.analysisMode === 'ai' && (
             <p className="border-t-[1.5px] border-line px-5 py-3 text-xs text-ink-muted">

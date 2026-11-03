@@ -158,6 +158,8 @@ export interface Paper {
   similarityWarning?: string | null
   /** The overall similarity split by kind of match. 'ai' mode only. */
   similarityBreakdown?: { copiedPercent: number; rewordedPercent: number }
+  /** What the similarity check actually covered. 'ai' mode only. */
+  similarityStats?: { passagesChecked: number; papersFound: number; fullTextsCompared: string[]; rewordingReviewed: number }
   /** AI-generated-text likelihood from the detector (Sapling). 'ai' mode only; absent on
    *  papers analyzed before this check existed. */
   aiContent?: AiContentResult

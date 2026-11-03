@@ -181,22 +181,32 @@ async function callTool(args) {
   }
 }
 
-async function callToolOnce({ model, system, userText, cachedText, tool, maxTokens = 16000 }) {
+// `think`: let the model reason before answering. A forced tool call makes Haiku 5.5 skip its
+// thinking, and its answers then vary a lot run to run — on one paper, 0 to 5 citation gaps and
+// 1 to 10 writing suggestions across four identical calls. With the tool offered rather than
+// forced, it thinks first and the counts held steady (5/5/5/5 citation gaps). If it then
+// doesn't call the tool, the call is repeated forced.
+async function callToolOnce({ model, system, userText, cachedText, tool, maxTokens = 16000, think = false }) {
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY is not set in .env — add it and restart the server')
+  const prompt = think ? `${userText}\n\nWhen you are done, call ${tool.name} with your results.` : userText
   const content = cachedText
-    ? [{ type: 'text', text: cachedText, cache_control: { type: 'ephemeral' } }, { type: 'text', text: userText }]
-    : userText
+    ? [{ type: 'text', text: cachedText, cache_control: { type: 'ephemeral' } }, { type: 'text', text: prompt }]
+    : prompt
   const response = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system,
     tools: [tool],
-    tool_choice: { type: 'tool', name: tool.name },
+    tool_choice: think ? { type: 'auto' } : { type: 'tool', name: tool.name },
     messages: [{ role: 'user', content }],
   })
   logCost(model, tool.name, response.usage)
   if (response.stop_reason === 'refusal') throw Object.assign(new Error(`${model} declined the request (safety refusal)`), { refusal: true })
   const block = response.content.find((b) => b.type === 'tool_use')
+  if (!block && think) {
+    console.warn(`[server] ${tool.name}: no tool call after thinking, retrying forced`)
+    return callToolOnce({ model, system, userText, cachedText, tool, maxTokens })
+  }
   if (!block) throw new Error('Model did not return a structured tool call')
   // A reply cut off at max_tokens arrives as a tool call with its later fields missing.
   if (response.stop_reason === 'max_tokens') console.warn(`[server] ${tool.name} reply hit max_tokens — some fields may be missing`)
@@ -897,7 +907,7 @@ async function compareAgainstFullTexts(chunks, candidateVotes, onSemanticError) 
   } catch (err) {
     onSemanticError(err)
   }
-  return { exact: matches, meaning }
+  return { exact: matches, meaning, compared: sources.map((x) => x.candidate.title) }
 }
 
 const JUDGE_BATCH = 15
@@ -1125,8 +1135,9 @@ async function checkExternalSimilarity(sections) {
   }
   let fullTextMatches = new Map()
   let meaningMatches = new Map()
+  let comparedFullTexts = []
   try {
-    ;({ exact: fullTextMatches, meaning: meaningMatches } = await compareAgainstFullTexts(chunks, candidateVotes, (err) => fail('OpenAI', err)))
+    ;({ exact: fullTextMatches, meaning: meaningMatches, compared: comparedFullTexts } = await compareAgainstFullTexts(chunks, candidateVotes, (err) => fail('OpenAI', err)))
   } catch (err) {
     console.error('[server] full-text comparison failed, continuing without it:', err.message)
   }
@@ -1234,6 +1245,14 @@ async function checkExternalSimilarity(sections) {
     },
     similaritySources: [...bestPerSource.values()].sort((a, b) => b.passageCount - a.passageCount || rank(b) - rank(a)).slice(0, 8),
     similarityWarning: warnings.length ? warnings.join(' ') : null,
+    // What was actually checked, so a clean result can show its work rather than look like the
+    // check didn't run.
+    similarityStats: {
+      passagesChecked: checkedChunks,
+      papersFound: candidateVotes.size,
+      fullTextsCompared: comparedFullTexts.slice(0, 6),
+      rewordingReviewed: reviews.length,
+    },
   }
 }
 
@@ -1542,6 +1561,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
           'You are a writing-clarity editor for academic papers. Find real clarity/concision/tone issues and strong claims lacking citations. Always flag informal contractions (don\'t, can\'t, it\'s, doesn\'t) and filler phrases (a lot of, kind of, really) as tone or concision issues. Preserve numbers, citations, and technical meaning. Be conservative otherwise — only flag things genuinely worth fixing. "suggested" must always be the literal replacement text to substitute for "original", verbatim — never a meta-instruction like "Delete this sentence" or "Rephrase for clarity". If the right fix is to delete the sentence entirely, set "suggested" to an empty string.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
+        think: true,
       }))),
       similarity,
       repetition,
@@ -1566,6 +1586,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       overallSimilarityPercent: externalSimilarity.overallSimilarityPercent,
       similaritySources: externalSimilarity.similaritySources,
       similarityBreakdown: externalSimilarity.similarityBreakdown,
+      similarityStats: externalSimilarity.similarityStats,
       similarityWarning: externalSimilarity.similarityWarning,
       aiContent,
       unavailableChecks: unavailable,

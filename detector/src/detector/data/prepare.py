@@ -248,6 +248,25 @@ def load_modern() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             dropped += 1
             continue
         rows[s["role"]].append((text, 1, "paper_sections", "modern", f"{_family(out['generator'])}/{out['generator']}", "none", s["paper_id"]))
+    # Data-grounded sections (detector.data.grounded): a second section per paper, written by a
+    # model from factual notes taken from the real section, so the AI text carries the same
+    # numbers and citations. Same paper id, so it stays in the same split group.
+    if (base / "grounded.jsonl").exists() and (base / "ai_grounded.jsonl").exists():
+        gsec = {r["idx"]: r for r in map(json.loads, open(base / "grounded.jsonl"))}
+        gai = {r["idx"]: r for r in map(json.loads, open(base / "ai_grounded.jsonl"))}
+        kept = 0
+        for idx, g in gsec.items():
+            out = gai.get(idx)
+            if out is None:
+                continue
+            text = strip_latex(_clean_ai(out["text"]))
+            if out.get("finish") not in ("end_turn", "stop") or len(text.split()) < 100 or _REFUSAL.match(text):
+                dropped += 1
+                continue
+            rows[g["role"]].append((strip_latex(g["human"]), 0, "paper_sections", "modern", "", "none", g["paper_id"]))
+            rows[g["role"]].append((text, 1, "paper_sections", "modern", f"{_family(out['generator'])}/{out['generator']}", "none", g["paper_id"]))
+            kept += 1
+        print(f"modern: added {kept} data-grounded pairs", file=sys.stderr)
     print(f"modern: dropped {dropped} unusable generations", file=sys.stderr)
     cols = ["text", "label", "domain", "origin", "generator", "attack", "source_id"]
     return tuple(pd.DataFrame(rows[k], columns=cols) for k in ("corpus", "ood", "audit"))
@@ -301,14 +320,19 @@ def finalize(df: pd.DataFrame) -> pd.DataFrame:
     return df[COLUMNS].reset_index(drop=True)
 
 
+DOMAIN_CAP = {"paper_sections": 2}
+
+
 def balance(df: pd.DataFrame, max_per_cell: int, seed: int) -> pd.DataFrame:
     """Within each domain, downsample so neither class exceeds the other by more than 20% and no
     (domain, label, generator) cell exceeds max_per_cell."""
     # Human text has a single "generator" cell per domain while AI text is spread over many, so
-    # human cells get a larger cap.
+    # human cells get a larger cap. The target domain (paper sections, the thing the app
+    # actually scores) gets a larger cap again, so none of it is discarded to match domains
+    # that only exist to teach general authorship.
     parts = []
-    for (_, label, _), g in df.groupby(["domain", "label", "generator"]):
-        cap = max_per_cell * (4 if label == 0 else 1)
+    for (domain, label, _), g in df.groupby(["domain", "label", "generator"]):
+        cap = max_per_cell * (4 if label == 0 else 1) * DOMAIN_CAP.get(domain, 1)
         parts.append(g.sample(min(len(g), cap), random_state=seed))
     df = pd.concat(parts)
     out = []
