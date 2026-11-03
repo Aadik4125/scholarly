@@ -89,6 +89,16 @@ export default function AiContentPage() {
     <div>
       {header}
 
+      <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-blue px-5 py-4">
+        <span className="ink-border shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-bold tracking-wide text-ink uppercase">
+          Beta
+        </span>
+        <p className="text-sm text-ink-on-sticky">
+          This detector is being retrained. It can miss text written by the newest AI models (such as Claude 4 and
+          GPT-5) and can occasionally flag human writing, so use the score as a rough signal only.
+        </p>
+      </div>
+
       {result.warning && (
         <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-yellow px-5 py-4">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
