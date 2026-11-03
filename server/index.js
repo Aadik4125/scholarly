@@ -319,10 +319,10 @@ let coreReadyAt = 0
 /** fetch() that retries network-level failures (dropped connection, DNS hiccup, hung request)
  *  twice with backoff, so one blip doesn't fail a lookup. HTTP error responses are returned
  *  as-is for the caller to handle. The final error names the cause, e.g. "(ECONNRESET)". */
-async function fetchRetry(url, options = {}, retries = 2) {
+async function fetchRetry(url, options = {}, retries = 2, timeoutMs = 20_000) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetch(url, { ...options, signal: AbortSignal.timeout(20_000) })
+      return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) })
     } catch (err) {
       if (attempt >= retries) {
         const code = err.cause?.code || (err.name !== 'TypeError' ? err.name : '')
@@ -354,9 +354,23 @@ function noteCoreRateLimit(res) {
 async function searchCore(passage) {
   if (!process.env.CORE_API_KEY) return []
   if (Date.now() < coreReadyAt) return null
-  const res = await fetchRetry(`${CORE_API_BASE}/search/works?${new URLSearchParams({ q: passage, limit: '3' })}`, {
-    headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
-  })
+  let res
+  try {
+    // CORE is a supplement to OpenAlex: one quick attempt, and during an outage it is skipped
+    // for a few minutes instead of making every analysis wait on timeouts.
+    res = await fetchRetry(`${CORE_API_BASE}/search/works?${new URLSearchParams({ q: passage, limit: '3' })}`, {
+      headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
+    }, 0, 10_000)
+  } catch (err) {
+    coreReadyAt = Date.now() + 5 * 60_000
+    console.warn('[server] CORE unreachable, skipping it for 5 minutes:', err.message)
+    return null
+  }
+  if (res.status >= 500) {
+    coreReadyAt = Date.now() + 5 * 60_000
+    console.warn(`[server] CORE returned ${res.status}, skipping it for 5 minutes`)
+    return null
+  }
   noteCoreRateLimit(res)
   if (res.status === 429) return null
   if (!res.ok) throw new Error(`CORE ${res.status}: ${errorDetail(res.status, await res.text().catch(() => ''))}`)
@@ -374,17 +388,27 @@ async function searchCore(passage) {
 // lookups at once, so request starts are spaced out globally to stay comfortably under that.
 const OPENALEX_MIN_GAP_MS = 60
 let openAlexNextSlot = 0
+const SEMANTIC_MIN_GAP_MS = 1100
+let semanticNextSlot = 0
 
 /** GETs /works with the API key attached, rate-limited, retrying once on a per-second 429.
  *  Throws on failure (including a spent daily budget, which retrying can't fix). */
-async function openAlexWorks(params) {
+async function openAlexWorks(params, { semantic = false } = {}) {
   if (process.env.OPENALEX_API_KEY) params.set('api_key', process.env.OPENALEX_API_KEY)
   if (process.env.OPENALEX_MAILTO) params.set('mailto', process.env.OPENALEX_MAILTO)
   for (let attempt = 0; ; attempt++) {
-    const slot = Math.max(Date.now(), openAlexNextSlot)
-    openAlexNextSlot = slot + OPENALEX_MIN_GAP_MS
+    // Meaning-based search has its own, much stricter limit (about 1 request per second per
+    // key, shared by every analysis running at once), so it gets its own queue.
+    const gap = semantic ? SEMANTIC_MIN_GAP_MS : OPENALEX_MIN_GAP_MS
+    const slot = Math.max(Date.now(), semantic ? semanticNextSlot : openAlexNextSlot)
+    if (semantic) semanticNextSlot = slot + gap
+    else openAlexNextSlot = slot + gap
     await sleep(slot - Date.now())
-    const res = await fetchRetry(`https://api.openalex.org/works?${params}`)
+    // A semantic search occasionally never answers; one bounded attempt, then the caller
+    // falls back to keyword search.
+    const res = semantic
+      ? await fetchRetry(`https://api.openalex.org/works?${params}`, {}, 0, 15_000)
+      : await fetchRetry(`https://api.openalex.org/works?${params}`)
     if (res.ok) return res.json()
     const body = await res.text().catch(() => '')
     if (res.status === 429 && attempt === 0 && !/budget/i.test(body)) {
@@ -412,7 +436,7 @@ async function searchOpenAlex(passage, { semantic = false } = {}) {
     per_page: '5',
     select: 'title,authorships,abstract_inverted_index,locations',
   })
-  const data = await openAlexWorks(params)
+  const data = await openAlexWorks(params, { semantic })
   return (data.results || []).map((w) => ({
     title: w.title || 'Untitled work',
     authors: (w.authorships || []).map((a) => a.author?.display_name).filter(Boolean).join(', ') || 'Unknown authors',
@@ -966,6 +990,10 @@ async function checkExternalSimilarity(sections) {
 
   const failures = { OpenAlex: { count: 0, lastError: '' }, CORE: { count: 0, lastError: '' }, OpenAI: { count: 0, lastError: '' } }
   const attempts = { OpenAlex: 0, CORE: 0 }
+  const semanticFallbacks = []
+  // Meaning-based searches are queued about a second apart, so a busy server could queue them
+  // for long; past this point remaining passages use keyword search instead of waiting.
+  const semanticDeadline = Date.now() + 45_000
   const fail = (name, err, n = 1) => {
     failures[name].count += n
     failures[name].lastError = err?.message || String(err)
@@ -983,8 +1011,9 @@ async function checkExternalSimilarity(sections) {
     const [coreOutcome, openAlexOutcome] = await Promise.allSettled([
       coreSampled.has(chunk) ? searchCore(query) : Promise.resolve(null),
       // Meaning-based search finds the source of reworded text; keywords are the fallback.
-      searchOpenAlex(chunk.text, { semantic: true }).catch((err) => {
+      (Date.now() > semanticDeadline ? Promise.reject(new Error('time limit for meaning-based search')) : searchOpenAlex(chunk.text, { semantic: true })).catch((err) => {
         if (/budget/i.test(err.message)) throw err
+        semanticFallbacks.push(err.message)
         return searchOpenAlex(query)
       }),
     ])
@@ -1076,6 +1105,9 @@ async function checkExternalSimilarity(sections) {
     }
   }
   const semanticByChunk = new Map(sampled.map((c, i) => [c, semanticResults[i]]))
+  if (semanticFallbacks.length) {
+    console.warn(`[server] meaning-based search failed on ${semanticFallbacks.length}/${sampled.length} passages, used keywords instead. Last error:`, semanticFallbacks.at(-1))
+  }
   let fullTextMatches = new Map()
   let meaningMatches = new Map()
   try {
@@ -1146,6 +1178,9 @@ async function checkExternalSimilarity(sections) {
     .filter(([, f]) => f.count > 0)
     .map(([name, f]) => {
       console.error(`[server] ${name} had ${f.count} failed lookups. Last error:`, f.lastError)
+      // CORE only supplements OpenAlex on passages OpenAlex also searched, so its failures don't
+      // leave anything unchecked (passages where both failed are already excluded from the score).
+      if (name === 'CORE') return null
       // Without embeddings only word-for-word copying can be found, which reworded text slips past.
       if (name === 'OpenAI') {
         return 'The meaning-based comparison was unavailable, so reworded (paraphrased) text could not be checked. This score only reflects word-for-word matches.'
@@ -1229,6 +1264,16 @@ async function saplingDetect(texts) {
 /** Returns { checked, aiPercent, sections: [{ heading, text, aiFraction, sentences: [{ start,
  *  end, score }] }], warning }. aiPercent is the share of scored text in sentences the detector
  *  rates at or above AI_SENTENCE_THRESHOLD. */
+/** True for a title block: author names, affiliations, supervisors, emails. It isn't prose, so
+ *  any score on it is meaningless, and flagging people's names as "AI" looks broken. */
+function looksLikeFrontMatter(text) {
+  const words = text.split(/\s+/).filter(Boolean)
+  if (words.length > 120) return false
+  const capitalized = words.filter((w) => /^[\p{Lu}]/u.test(w)).length / words.length
+  const affiliation = /\b(universit|department|institute|school of|faculty|college|supervisor|corresponding author)|@/i.test(text)
+  return affiliation && capitalized >= 0.5
+}
+
 async function checkAiContent(sections) {
   const useSapling = AI_DETECT_PROVIDER === 'sapling'
   if (useSapling ? !process.env.SAPLING_API_KEY : !detectorStatus().ready) {
@@ -1237,6 +1282,7 @@ async function checkAiContent(sections) {
   const eligible = sections
     .filter((s) => !AI_DETECT_SKIP_HEADING.test(s.heading))
     .map((s) => ({ heading: s.heading, text: s.text.replace(/\s+/g, ' ').trim() }))
+    .filter((s) => !looksLikeFrontMatter(s.text))
     .filter((s) => s.text.length >= AI_DETECT_MIN_SECTION_CHARS)
   const totalChars = eligible.reduce((n, s) => n + s.text.length, 0)
   if (totalChars === 0) return { checked: false, aiPercent: 0, sections: [], warning: 'No prose long enough to check.' }
