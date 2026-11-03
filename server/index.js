@@ -28,6 +28,10 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 
 const SONNET = 'claude-sonnet-5'
 const HAIKU = 'claude-haiku-5-5'
+// Newer Claude models end some replies with a safety refusal on virology, toxin and pathogen
+// topics, even for ordinary published research. Haiku 4.5 wrote 500 paper sections on the same
+// mix of topics with no refusals, so refused checks are retried with it.
+const REFUSAL_FALLBACK = 'claude-haiku-4-5'
 const EMBEDDING_MODEL = 'text-embedding-3-small'
 const MAX_SENTENCES = 800
 // Sentence pairs at or above this cosine similarity are treated as repeated text.
@@ -141,7 +145,7 @@ function nextId(prefix) {
 }
 
 // USD per million tokens: [input, output]. Cache writes cost 1.25x input, cache reads 0.1x.
-const PRICES = { [SONNET]: [2, 10], [HAIKU]: [0.1, 0.5] }
+const PRICES = { [SONNET]: [2, 10], [HAIKU]: [0.1, 0.5], [REFUSAL_FALLBACK]: [1, 5] }
 function logCost(model, label, u) {
   const [inP, outP] = PRICES[model] || [0, 0]
   const cw = u.cache_creation_input_tokens || 0
@@ -166,7 +170,18 @@ function asList(value, field) {
 
 // `cachedText` goes first and is marked for prompt caching, so repeat requests that share it
 // (e.g. several questions about the same paper) pay ~10% of the normal input price for it.
-async function callTool({ model, system, userText, cachedText, tool, maxTokens = 16000 }) {
+async function callTool(args) {
+  try {
+    return await callToolOnce(args)
+  } catch (err) {
+    if (!err.refusal || args.model === REFUSAL_FALLBACK) throw err
+    console.warn(`[server] ${args.tool.name}: ${args.model} refused, retrying with ${REFUSAL_FALLBACK}`)
+    // Haiku 4.5 allows at most 64K output tokens.
+    return callToolOnce({ ...args, model: REFUSAL_FALLBACK, maxTokens: Math.min(args.maxTokens ?? 16000, 16000) })
+  }
+}
+
+async function callToolOnce({ model, system, userText, cachedText, tool, maxTokens = 16000 }) {
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY is not set in .env — add it and restart the server')
   const content = cachedText
     ? [{ type: 'text', text: cachedText, cache_control: { type: 'ephemeral' } }, { type: 'text', text: userText }]
@@ -180,7 +195,7 @@ async function callTool({ model, system, userText, cachedText, tool, maxTokens =
     messages: [{ role: 'user', content }],
   })
   logCost(model, tool.name, response.usage)
-  if (response.stop_reason === 'refusal') throw new Error(`${model} declined the request (safety refusal)`)
+  if (response.stop_reason === 'refusal') throw Object.assign(new Error(`${model} declined the request (safety refusal)`), { refusal: true })
   const block = response.content.find((b) => b.type === 'tool_use')
   if (!block) throw new Error('Model did not return a structured tool call')
   // A reply cut off at max_tokens arrives as a tool call with its later fields missing.
@@ -1465,8 +1480,14 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
     // AI detection is CPU-heavy. On a small shared server, running it alongside the web lookups
     // starves them until they time out, so it starts once those lookups have finished. The
     // Claude calls only wait on the network, so they run alongside everything.
-    const similarity = timed('similarity', 'external similarity', checkExternalSimilarity(sections))
-    const repetition = timed('repetition', 'internal repetition', checkSelfSimilarity(sections))
+    const similarity = timed('similarity', 'external similarity', checkExternalSimilarity(sections).catch((err) => {
+      console.error('[server] external similarity crashed, continuing without it:', err)
+      return { checked: false, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: 'The similarity check failed unexpectedly.' }
+    }))
+    const repetition = timed('repetition', 'internal repetition', checkSelfSimilarity(sections).catch((err) => {
+      console.error('[server] internal repetition crashed, continuing without it:', err)
+      return []
+    }))
     const aiContentAfterLookups = Promise.allSettled([similarity, repetition]).then(() =>
       timed('aiContent', 'AI-content detection', checkAiContent(sections).catch((err) => {
         console.error('[server] AI-content detection crashed, continuing without it:', err)
@@ -1474,21 +1495,30 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       })),
     )
 
+    // The Claude checks are independent of similarity and AI detection: if one fails (an outage,
+    // or a refusal even after the fallback model), the paper still gets every other result.
+    const unavailable = []
+    const orEmpty = (name, promise) =>
+      promise.catch((err) => {
+        console.error(`[server] ${name} check failed, continuing without it:`, err.message)
+        unavailable.push(name)
+        return {}
+      })
     const [findings, writing, externalSimilarity, selfSimilarityMatches, aiContent] = await Promise.all([
-      timed('consistency', 'consistency & novelty (Sonnet)', callTool({
+      timed('consistency', 'consistency & novelty (Sonnet)', orEmpty('consistency', callTool({
         model: SONNET,
         system:
           'You are an academic integrity and research-quality reviewer. You read a student/researcher paper and find REAL internal contradictions (conflicting numbers, dataset sizes, model names, methodology claims) and assess novelty against general knowledge of the field. Be conservative: only report issues you are confident about, grounded in exact quotes from the text. Do not report repeated or copied text as a contradiction — repetition is checked separately. If the paper is clean, return an empty array rather than inventing issues.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: findingsTool,
-      })),
-      timed('writing', 'writing & citations (Haiku)', callTool({
+      }))),
+      timed('writing', 'writing & citations (Haiku)', orEmpty('writing', callTool({
         model: HAIKU,
         system:
           'You are a writing-clarity editor for academic papers. Find real clarity/concision/tone issues and strong claims lacking citations. Always flag informal contractions (don\'t, can\'t, it\'s, doesn\'t) and filler phrases (a lot of, kind of, really) as tone or concision issues. Preserve numbers, citations, and technical meaning. Be conservative otherwise — only flag things genuinely worth fixing. "suggested" must always be the literal replacement text to substitute for "original", verbatim — never a meta-instruction like "Delete this sentence" or "Rephrase for clarity". If the right fix is to delete the sentence entirely, set "suggested" to an empty string.',
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
-      })),
+      }))),
       similarity,
       repetition,
       aiContentAfterLookups,
@@ -1514,6 +1544,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
       similarityBreakdown: externalSimilarity.similarityBreakdown,
       similarityWarning: externalSimilarity.similarityWarning,
       aiContent,
+      unavailableChecks: unavailable,
     }
     recordRun(chars, (Date.now() - started) / 1000)
     if (streaming) {

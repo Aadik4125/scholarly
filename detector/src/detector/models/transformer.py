@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader
@@ -106,6 +107,7 @@ def main() -> None:
     ap.add_argument("--max-train", type=int, default=60_000, help="cap on training texts (docs + windows)")
     ap.add_argument("--max-val", type=int, default=4000)
     ap.add_argument("--seed", type=int, default=13)
+    ap.add_argument("--keep-origin", nargs="*", default=["modern"], help="origins always included in training")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     dev = device()
@@ -113,7 +115,12 @@ def main() -> None:
 
     data = load_split(args.split)
     frame = training_frame(data["train"], windows_per_doc=2, seed=args.seed)
-    frame = frame.sample(min(len(frame), args.max_train), random_state=args.seed)
+    # Every text from the priority origins is kept (current-model paper sections are a small share
+    # of the corpus but the case the app sees most); the rest of the cap is sampled from the others.
+    keep = frame["origin"].isin(args.keep_origin)
+    rest = frame[~keep]
+    frame = pd.concat([frame[keep], rest.sample(max(0, min(len(rest), args.max_train - int(keep.sum()))), random_state=args.seed)])
+    print(f"kept all {int(keep.sum())} texts from {args.keep_origin}")
     texts, labels = frame["text"].tolist(), frame["label"].astype(int).tolist()
     val = data["val"].sample(min(len(data["val"]), args.max_val), random_state=args.seed)
     print(f"train texts={len(texts)}  val docs={len(val)}")

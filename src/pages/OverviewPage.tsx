@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack, Bot } from 'lucide-react'
+import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack, Bot, AlertTriangle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import SeverityBadge from '../components/SeverityBadge'
@@ -24,6 +24,11 @@ function truncateWords(text: string, maxLen: number): string {
   const cut = text.slice(0, maxLen)
   const lastSpace = cut.lastIndexOf(' ')
   return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim() + '...'
+}
+
+const CHECK_NAMES: Record<string, string> = {
+  consistency: 'The consistency & novelty review',
+  writing: 'Writing & citation suggestions',
 }
 
 export default function OverviewPage() {
@@ -76,6 +81,18 @@ export default function OverviewPage() {
           </Link>
         </div>
       </div>
+
+      {paper.unavailableChecks && paper.unavailableChecks.length > 0 && (
+        <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-yellow px-5 py-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
+          <p className="text-sm text-ink-on-sticky">
+            <span className="font-bold">
+              {paper.unavailableChecks.map((c) => CHECK_NAMES[c] ?? c).join(' and ')} could not run on this paper.
+            </span>{' '}
+            Similarity and AI-content results are complete. Try re-analyzing later for the rest.
+          </p>
+        </div>
+      )}
 
       <DocumentViewerCard />
 

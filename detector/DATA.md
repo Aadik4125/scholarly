@@ -10,6 +10,9 @@ in `data/processed/`.
 | [HC3](https://huggingface.co/datasets/Hello-SimpleAI/HC3) (Guo et al., 2023) | CC-BY-SA-4.0 | Human vs ChatGPT answers (finance, medicine, open_qa, reddit_eli5, wiki_csai) | `all.jsonl` |
 | [arXiv abstracts 2021](https://huggingface.co/datasets/gfissore/arxiv-abstracts-2021) | CC0-1.0 | Abstracts from 2007–08: guaranteed human-written academic text. 3,000 are held back as the false-positive audit set. | first 40 MB of the gzip |
 
+| [peS2o v2](https://huggingface.co/datasets/allenai/peS2o) (Soldaini & Lo, 2023) | ODC-BY-1.0 | Full-text papers created 2021 or earlier (so written before ChatGPT), all fields. One body section per paper (Introduction, Methods, Results, Discussion, Conclusion…), clipped to about 450 words. | first 2,500 lines of v2 train shards 10, 14 and 18 → `raw/pes2o/fulltext.jsonl` |
+| Modern generations (ours) | generated | For each peS2o section, a current model writes the same section of the same paper (title, heading and abstract as context) or rewrites the human section. Tasks: write 35%, student request 20%, "make it sound human" 15%, polish 30%. Models: Claude Sonnet 5, Haiku 5.5, Haiku 4.5, Opus 5.5; GPT-4o, GPT-4o-mini, GPT-5-mini. **Held out, never trained on:** Claude Sonnet 5.5 and GPT-5.5. | `python -m detector.data.modern select / generate / collect` (Claude via the Message Batches API) → `raw/modern/` |
+
 **HC3 license note:** HC3 is share-alike (CC-BY-SA). If model weights trained on it count as an
 adaptation, they would inherit the license. If that matters for distribution, retrain with
 `--no-hc3`; MAGE and RAID cover the same ground.
@@ -38,7 +41,12 @@ Splits never put a group on two sides. `tests/test_text_and_splits.py` checks th
 
 Held-out sets, never in any split: `audit.parquet` (human academic), `mage_ood.parquet` (GPT-4, plain + paraphrased), `raid_attacks.parquet`.
 
+Held-out modern sets (built in `prepare.py`, never in any split): `modern_ood.parquet` (Sonnet 5.5 and
+GPT-5.5 sections with their human sections) and `modern_audit.parquet` (800 human paper sections).
+Inline LaTeX is converted to plain text in both classes, since uploaded PDFs and Word files never
+contain it. Training the transformer always includes every modern text (`--keep-origin modern`).
+
 ## Known limitations
-- The newest generators are GPT-4 (2023), Llama-2-chat and Mistral-7B. There is nothing from 2024–26 (GPT-4o/5, Claude 3+, Gemini, Llama 3+, Qwen). Topping up with modern generations is the most valuable data improvement left.
-- Human academic text is mostly abstracts, not full paper sections (methods, results).
+- Modern generations cover Claude and GPT only: no Gemini, Llama 3+, Qwen or DeepSeek.
+- Modern human sections are mostly Introductions and Discussions (the headings papers use most).
 - English only.

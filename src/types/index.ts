@@ -161,4 +161,7 @@ export interface Paper {
   /** AI-generated-text likelihood from the detector (Sapling). 'ai' mode only; absent on
    *  papers analyzed before this check existed. */
   aiContent?: AiContentResult
+  /** AI-reviewed checks that could not run on this paper (e.g. 'consistency', 'writing'), while
+   *  the rest of the analysis did. 'ai' mode only. */
+  unavailableChecks?: string[]
 }

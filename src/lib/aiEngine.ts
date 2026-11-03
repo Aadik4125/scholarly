@@ -22,6 +22,7 @@ interface AnalyzeResponse {
   similaritySources: Paper['similaritySources']
   similarityWarning: string | null
   similarityBreakdown?: Paper['similarityBreakdown']
+  unavailableChecks?: string[]
   aiContent?: Paper['aiContent']
 }
 
@@ -122,6 +123,7 @@ export async function analyzePaperWithAI(
     similarityWarning: data.similarityWarning,
     similarityBreakdown: data.similarityBreakdown,
     aiContent: data.aiContent,
+    unavailableChecks: data.unavailableChecks,
     versions: [
       {
         id: 'v1',
