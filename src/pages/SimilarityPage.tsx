@@ -167,8 +167,10 @@ export default function SimilarityPage() {
           {paper.analysisMode === 'ai' && (
             <p className="border-t-[1.5px] border-line px-5 py-3 text-xs text-ink-muted">
               Reworded matches are confirmed by AI reading both passages side by side. Reference lists are not counted.
-              Full papers are compared when they are open access; for others, only the abstract. Websites and other
-              students’ work are not included, so treat this as an early check, not a final verdict.
+              Full papers are compared when they are open access; for others, only the abstract. In our tests this
+              caught most paragraphs copied word for word from published papers, but a single paragraph reworded from
+              the body of a paper is usually missed, as are websites and other students&rsquo; work. Treat this as an
+              early check, not a final verdict.
             </p>
           )}
         </div>
