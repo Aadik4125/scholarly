@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack, Bot } from 'lucide-react'
+import { ShieldAlert, PenLine, Fingerprint, Sparkles, ArrowRight, CheckCircle2, FileStack, Bot, AlertTriangle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import StatCard from '../components/StatCard'
 import SeverityBadge from '../components/SeverityBadge'
@@ -9,6 +9,7 @@ import Polaroid from '../components/Polaroid'
 import DocumentViewerCard from '../components/DocumentViewerCard'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
 import type { Severity } from '../types'
+import { aiVerdict, VERDICT_TEXT } from '../lib/aiVerdict'
 
 const container = {
   hidden: {},
@@ -26,6 +27,11 @@ function truncateWords(text: string, maxLen: number): string {
   return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim() + '...'
 }
 
+const CHECK_NAMES: Record<string, string> = {
+  consistency: 'The consistency & novelty review',
+  writing: 'Writing & citation suggestions',
+}
+
 export default function OverviewPage() {
   const { paperId } = useParams()
   const { paper } = useCurrentPaper()
@@ -34,6 +40,7 @@ export default function OverviewPage() {
   const isHeuristic = paper.analysisMode === 'heuristic'
   const corpusChecked = paper.analysisMode === 'ai' && paper.similarityCorpusChecked === true
   const noSimilarityCorpus = paper.analysisMode !== 'demo' && !corpusChecked
+  const aiCheck = paper.aiContent?.checked ? aiVerdict(paper.aiContent.sections) : null
   const openIssues = paper.consistencyIssues.filter((i) => i.status === 'open')
   const highSeverity = openIssues.filter((i) => i.severity === 'high').length
   const pendingWriting = paper.writingSuggestions.filter((s) => s.status === 'pending').length
@@ -77,6 +84,18 @@ export default function OverviewPage() {
         </div>
       </div>
 
+      {paper.unavailableChecks && paper.unavailableChecks.length > 0 && (
+        <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-yellow px-5 py-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
+          <p className="text-sm text-ink-on-sticky">
+            <span className="font-bold">
+              {paper.unavailableChecks.map((c) => CHECK_NAMES[c] ?? c).join(' and ')} could not run on this paper.
+            </span>{' '}
+            Similarity and AI-content results are complete. Try re-analyzing later for the rest.
+          </p>
+        </div>
+      )}
+
       <DocumentViewerCard />
 
       <motion.div variants={container} initial="hidden" animate="show">
@@ -116,17 +135,22 @@ export default function OverviewPage() {
             />
           )}
           <StatCard icon={Sparkles} label="Citation gaps" value={paper.citationGaps.length} tone="purple" rotate={1.5} />
-          {paper.aiContent?.checked && (
+          {paper.aiContent?.checked && aiCheck && (
             <Link to={`/paper/${paperId}/ai-content`} className="block">
-              <StatCard
-                icon={Bot}
-                label="Likely AI-generated text"
-                value={paper.aiContent.aiPercent}
-                suffix="%"
-                decimals={1}
-                tone="green"
-                rotate={-1.5}
-              />
+              <div
+                style={{ transform: 'rotate(-1.5deg)' }}
+                className={`ink-border flex h-full flex-col justify-center rounded-2xl p-5 shadow-[var(--shadow-card)] ${
+                  aiCheck.level === 'likely' ? 'bg-sticky-pink' : aiCheck.level === 'some' ? 'bg-sticky-yellow' : 'bg-sticky-green'
+                }`}
+              >
+                <div className="ink-border flex h-10 w-10 items-center justify-center rounded-full bg-white text-ink">
+                  <Bot size={18} />
+                </div>
+                <p className="mt-4 font-display text-2xl leading-none text-ink-on-sticky">{VERDICT_TEXT[aiCheck.level].short}</p>
+                <p className="mt-2 text-sm font-semibold text-ink-on-sticky">
+                  AI writing check &middot; {paper.aiContent.aiPercent.toFixed(1)}% of sentences
+                </p>
+              </div>
             </Link>
           )}
         </motion.div>

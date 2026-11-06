@@ -1,9 +1,5 @@
-// Sends events to Google Analytics when the gtag snippet is present on the page; a no-op otherwise.
-export function trackEvent(name: string, params: Record<string, unknown> = {}) {
-  try {
-    const gtag = (window as unknown as { gtag?: (...args: unknown[]) => void }).gtag
-    gtag?.('event', name, params)
-  } catch {
-    /* analytics must never break the app */
-  }
+// Sends a Google Analytics (GA4) event. gtag is loaded by the tag in index.html; if it's
+// blocked (ad blockers, privacy settings) this does nothing.
+export function track(event: string, params: Record<string, string | number | boolean> = {}) {
+  ;(window as { gtag?: (...args: unknown[]) => void }).gtag?.('event', event, params)
 }

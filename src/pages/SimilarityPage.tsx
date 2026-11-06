@@ -16,9 +16,9 @@ export default function SimilarityPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="a secondary signal"
+        eyebrow="checked word for word and by meaning"
         title="Similarity & Citations"
-        description="Provider-abstracted and swappable — not the primary differentiator of this product."
+        description="Your paper compared with 250M+ research papers from OpenAlex and CORE, for copied and reworded passages."
       />
 
       {paper.analysisMode === 'ai' && paper.similarityWarning && (
@@ -26,7 +26,7 @@ export default function SimilarityPage() {
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
           <p className="text-sm text-ink-on-sticky">
             <span className="font-bold">{corpusChecked ? 'Similarity check incomplete. ' : 'Similarity check failed. '}</span>
-            {paper.similarityWarning} Fix the issue and re-analyze the paper for a full score.
+            {paper.similarityWarning} Try re-analyzing later for a full score.
           </p>
         </div>
       )}
@@ -65,7 +65,19 @@ export default function SimilarityPage() {
             <div className="mt-5">
               <Meter value={score} />
             </div>
-            <p className="mt-3 text-xs font-semibold text-ink-muted">Across {paper.similaritySources.length} matched sources</p>
+            {paper.similarityBreakdown && (
+              <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold text-ink-on-sticky">
+                <span className="ink-border rounded-full bg-sticky-pink px-2.5 py-1">
+                  {paper.similarityBreakdown.copiedPercent}% word for word
+                </span>
+                <span className="ink-border rounded-full bg-sticky-blue px-2.5 py-1">
+                  {paper.similarityBreakdown.rewordedPercent}% reworded
+                </span>
+              </div>
+            )}
+            <p className="mt-3 text-xs font-semibold text-ink-muted">
+              Across {paper.similaritySources.length} matched {paper.similaritySources.length === 1 ? 'source' : 'sources'}
+            </p>
           </motion.div>
         )}
 
@@ -80,24 +92,69 @@ export default function SimilarityPage() {
                   <div>
                     <p className="text-sm font-bold text-ink">{s.title}</p>
                     <p className="text-xs text-ink-muted">{s.authors}</p>
+                    {s.passageCount && s.passageCount > 1 && (
+                      <p className="mt-1 text-xs font-semibold text-ink-2">
+                        {s.passageCount} passages of your paper match this source
+                      </p>
+                    )}
                   </div>
                   <span
                     title={
                       s.matchType === 'fulltext'
-                        ? 'Share of this passage’s wording found word-for-word in the source’s full text'
-                        : 'Closeness of this passage to the source’s abstract'
+                        ? 'Share of this passage’s wording found word for word in the source'
+                        : 'This passage restates the source in other words. The number is how close the meaning is.'
                     }
                     className={`ink-border shrink-0 rounded-full px-2.5 py-1 text-xs font-bold text-ink-on-sticky ${
                       s.matchType === 'fulltext' ? 'bg-sticky-pink' : 'bg-sticky-blue'
                     }`}
                   >
-                    {s.matchType === 'fulltext' ? `${s.matchPercent}% text overlap` : `${s.matchPercent}% match`}
+                    {s.matchType === 'fulltext' ? `Word for word · ${s.matchPercent}%` : `Reworded · ${s.matchPercent}% similar`}
                   </span>
                 </div>
-                <p className="mt-2 text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                {s.sourceExcerpt ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl bg-surface-hover p-3">
+                      <p className="mb-1 text-[11px] font-bold tracking-wide text-ink-muted uppercase">Your paper</p>
+                      <p className="text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                    </div>
+                    <div className="rounded-xl bg-surface-hover p-3">
+                      <p className="mb-1 text-[11px] font-bold tracking-wide text-ink-muted uppercase">Source</p>
+                      <p className="text-sm text-ink-2 italic">&ldquo;{s.sourceExcerpt}&rdquo;</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-ink-2 italic">&ldquo;{s.matchedExcerpt}&rdquo;</p>
+                )}
               </div>
             ))}
-            {paper.similaritySources.length === 0 && (
+            {paper.similaritySources.length === 0 && corpusChecked && paper.similarityStats ? (
+              <div className="px-5 py-6">
+                <p className="text-sm font-bold text-ink">No copied or reworded passages found.</p>
+                <p className="mt-1 text-sm text-ink-2">Here is what was checked:</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-2">
+                  <li>{paper.similarityStats.passagesChecked} passages of your paper, word for word and by meaning</li>
+                  <li>{paper.similarityStats.papersFound} related papers found by searching OpenAlex and CORE</li>
+                  {paper.similarityStats.fullTextsCompared.length > 0 && (
+                    <li>
+                      Full text of the {paper.similarityStats.fullTextsCompared.length} closest, compared passage by passage:
+                      <ul className="mt-1 list-[circle] space-y-0.5 pl-5 text-xs text-ink-muted">
+                        {paper.similarityStats.fullTextsCompared.map((t) => (
+                          <li key={t}>{t}</li>
+                        ))}
+                      </ul>
+                    </li>
+                  )}
+                  {paper.similarityStats.rewordingReviewed > 0 && (
+                    <li>{paper.similarityStats.rewordingReviewed} possible rewordings reviewed by AI, none confirmed</li>
+                  )}
+                </ul>
+                <p className="mt-3 text-xs text-ink-muted">
+                  0% means no passage closely matched published research in these databases. Your own paper isn&rsquo;t
+                  in them yet, so it can&rsquo;t match itself, but text taken from other published work would still show
+                  up here.
+                </p>
+              </div>
+            ) : paper.similaritySources.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-ink-muted">
                 {corpusChecked
                   ? 'No matching sources found across OpenAlex or CORE.'
@@ -105,8 +162,17 @@ export default function SimilarityPage() {
                     ? 'No sources could be searched.'
                     : 'No similarity provider connected.'}
               </p>
-            )}
+            ) : null}
           </div>
+          {paper.analysisMode === 'ai' && (
+            <p className="border-t-[1.5px] border-line px-5 py-3 text-xs text-ink-muted">
+              Reworded matches are confirmed by AI reading both passages side by side. Reference lists are not counted.
+              Full papers are compared when they are open access; for others, only the abstract. In our tests this
+              caught most paragraphs copied word for word from published papers, but a single paragraph reworded from
+              the body of a paper is usually missed, as are websites and other students&rsquo; work. Treat this as an
+              early check, not a final verdict.
+            </p>
+          )}
         </div>
       </div>
 

@@ -7,6 +7,7 @@ import { getMockAnswer } from '../data/askMyPaper'
 import { getRealAnswer } from '../lib/realAnswerEngine'
 import { getAIAnswer } from '../lib/aiAnswerEngine'
 import type { ChatMessage } from '../types'
+import { track } from '../lib/analytics'
 
 let msgId = 0
 const nextId = () => `m-${msgId++}`
@@ -57,8 +58,9 @@ export default function AskPaperPage() {
 
   if (!paper) return null
 
-  const send = async (text: string) => {
+  const send = async (text: string, suggested = false) => {
     if (!text.trim()) return
+    track('ask_question', { suggested })
     const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text }
     setMessages((prev) => [...prev, userMsg])
     setInput('')
@@ -161,7 +163,7 @@ export default function AskPaperPage() {
               {paper.suggestedQuestions.map((q, i) => (
                 <button
                   key={q}
-                  onClick={() => send(q)}
+                  onClick={() => send(q, true)}
                   style={{ transform: `rotate(${i % 2 === 0 ? -1 : 1}deg)` }}
                   className="ink-border rounded-full bg-surface-raised px-3 py-1.5 text-xs font-semibold text-ink-2 shadow-[var(--shadow-card)] transition-colors hover:bg-sticky-yellow hover:text-ink-on-sticky"
                 >

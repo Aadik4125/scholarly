@@ -17,15 +17,18 @@ import {
 import { useTheme } from '../hooks/useTheme'
 import { useSessionFile } from '../hooks/useSessionFile'
 import { useToast } from '../hooks/useToast'
-import { analyzePaperWithAI, SignUpRequiredError } from '../lib/aiEngine'
+import { analyzePaperWithAI, SignUpRequiredError, type AnalysisProgress } from '../lib/aiEngine'
 import { useAuth } from '../hooks/useAuth'
 import { hasUsedFreeAnalysis } from '../lib/usage'
 import { stashPendingUpload, takePendingUpload, clearPendingUpload } from '../lib/pendingUpload'
 import SignInModal from '../components/SignInModal'
 import AccountMenu from '../components/AccountMenu'
+import AnalysisProgressPanel from '../components/AnalysisProgressPanel'
 import { savePaper, listPapers, deletePaper, type PaperSummary } from '../lib/paperDb'
 import StickyTag from '../components/StickyTag'
 import Polaroid from '../components/Polaroid'
+import SiteFooter from '../components/SiteFooter'
+import { track } from '../lib/analytics'
 
 // Uploading a real file runs the actual analysis pipeline: text is extracted in the
 // browser, then sent to the backend (/api/analyze) where Claude finds contradictions and
@@ -49,6 +52,10 @@ export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false)
   const [fileName, setFileName] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(-1)
+  // Real uploads show live progress from the server; the sample paper keeps the simple step list.
+  const [isRealRun, setIsRealRun] = useState(false)
+  const [progress, setProgress] = useState<AnalysisProgress>({ estimateSeconds: null, done: {} })
+  const [serverStartedAt, setServerStartedAt] = useState<number | null>(null)
 
   const { user, loading: authLoading } = useAuth()
   const [signInFile, setSignInFile] = useState<File | null>(null)
@@ -71,6 +78,7 @@ export default function UploadPage() {
   const runDemoProcessing = useCallback(
     (displayName: string) => {
       setFileName(displayName)
+      setIsRealRun(false)
       setStepIndex(0)
       steps.forEach((_, i) => {
         setTimeout(() => setStepIndex(i + 1), 450 + i * 420)
@@ -89,13 +97,27 @@ export default function UploadPage() {
         setSignInFile(file)
         return
       }
+      track('upload_start', {
+        file_type: (file.name.split('.').pop() || '').toLowerCase(),
+        file_size_kb: Math.round(file.size / 1024),
+      })
       setSessionFile(file)
       setFileName(file.name)
+      setIsRealRun(true)
+      setProgress({ estimateSeconds: null, done: {} })
+      setServerStartedAt(null)
       setStepIndex(0)
       try {
-        const paper = await analyzePaperWithAI(file, setStepIndex)
+        const onStage = (stage: number) => {
+          setStepIndex(stage)
+          if (stage === 1) setServerStartedAt(Date.now())
+        }
+        const paper = await analyzePaperWithAI(file, onStage, setProgress)
         setStepIndex(steps.length)
         const id = await savePaper(file, paper)
+        // Real uploads only; the sample paper sends sample_paper_open instead. This is the
+        // Google Ads conversion, so it fires once the dashboard is ready to open.
+        track('analysis_complete', { page_count: paper.pageCount, word_count: paper.wordCount })
         navigate(`/paper/${id}`)
       } catch (err) {
         console.error(err)
@@ -106,6 +128,7 @@ export default function UploadPage() {
           push(err instanceof Error ? err.message : 'Analysis failed. Check the server and API keys.', 'neutral')
         }
         setFileName(null)
+        setIsRealRun(false)
         setStepIndex(-1)
       }
     },
@@ -122,6 +145,7 @@ export default function UploadPage() {
   }, [authLoading, user, handleRealFile])
 
   const handleSample = useCallback(() => {
+    track('sample_paper_open')
     setSessionFile(null)
     runDemoProcessing('dropout-prediction-draft3.pdf')
   }, [setSessionFile, runDemoProcessing])
@@ -242,6 +266,9 @@ export default function UploadPage() {
                 </div>
                 <p className="text-sm font-bold text-ink">{fileName}</p>
 
+                {isRealRun ? (
+                  <AnalysisProgressPanel stage={stepIndex} progress={progress} serverStartedAt={serverStartedAt} />
+                ) : (
                 <div className="flex w-full flex-col gap-2.5">
                   {steps.map((label, i) => {
                     const done = stepIndex > i
@@ -260,16 +287,16 @@ export default function UploadPage() {
                     )
                   })}
                 </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
         </motion.div>
 
         <p className="mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
-          Privacy: your paper's text is sent to Anthropic (Claude), OpenAI and Sapling (AI-content detection) for
-          analysis, and short passages are searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
-          file are saved only in this browser, and you can remove them below at any time. If you sign in we store your
-          name and email — see our <Link to="/privacy" className="underline">Privacy Policy</Link> and <Link to="/terms" className="underline">Terms</Link>.
+          Privacy: your paper's text is sent to Anthropic (Claude) and OpenAI for analysis; AI-content detection
+          runs on Scholarly's own model, on our server. Short passages are searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
+          file are saved only in this browser, and you can remove them below at any time. If you sign in we store your name and email — see our <Link to="/privacy" className="underline">Privacy Policy</Link>.
         </p>
 
         {papers.length > 0 && !isProcessing && (
@@ -338,6 +365,7 @@ export default function UploadPage() {
           void clearPendingUpload()
         }}
       />
+      <SiteFooter />
     </div>
   )
 }

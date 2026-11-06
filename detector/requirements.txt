@@ -1,0 +1,13 @@
+# Core (data, baselines, evaluation)
+pandas>=2.2
+pyarrow>=15
+scikit-learn>=1.5
+datasets>=3
+datasketch>=1.6
+joblib
+huggingface_hub
+pytest
+# Transformer training + ONNX export (install when starting Phase 2, E3)
+# torch
+# transformers
+# optimum[onnxruntime]

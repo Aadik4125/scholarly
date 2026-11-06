@@ -2,12 +2,83 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-JD59KP370N"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-JD59KP370N');
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Scholarly — Academic Research & Integrity Copilot</title>
+    <!-- The server swaps the title, description and canonical URL per page (see server/index.js). -->
+    <title>Scholarly: AI Paper Checker for Plagiarism, AI Content &amp; Consistency</title>
+    <meta name="description" content="Upload your research paper or essay and get a full check in minutes: internal contradictions, writing suggestions, missing citations, similarity to published work and AI-generated text. Free, and your paper stays in your browser." />
+    <link rel="canonical" href="https://scholar.click/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Scholarly" />
+    <meta property="og:url" content="https://scholar.click/" />
+    <meta property="og:title" content="Scholarly: check your paper before you submit" />
+    <meta property="og:description" content="AI research and academic integrity copilot: consistency checks, writing feedback, citation gaps, similarity and AI-content detection for your paper." />
+    <meta property="og:image" content="https://scholar.click/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Scholarly: check your paper before you submit" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Scholarly: check your paper before you submit" />
+    <meta name="twitter:description" content="Consistency checks, writing feedback, citation gaps, similarity and AI-content detection for your research paper." />
+    <meta name="twitter:image" content="https://scholar.click/og-image.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Scholarly",
+        "url": "https://scholar.click/",
+        "applicationCategory": "EducationalApplication",
+        "operatingSystem": "Any (web browser)",
+        "description": "AI research and academic integrity copilot. Upload a paper (PDF or Word) to check internal consistency, writing clarity, missing citations, similarity to published research and AI-generated text, and ask questions about your paper.",
+        "image": "https://scholar.click/og-image.png",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "Internal consistency checks",
+          "Academic writing suggestions",
+          "Citation gap detection",
+          "Similarity check against OpenAlex and CORE",
+          "AI-generated text detection",
+          "Ask My Paper Q&A"
+        ],
+        "publisher": { "@type": "Organization", "name": "Rizmak Solutions", "email": "meher@rizmaksolutions.com" }
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Shown before the app loads, and to crawlers that don't run JavaScript. React replaces it. -->
+      <main style="max-width: 42rem; margin: 0 auto; padding: 4rem 1.25rem; font-family: 'Times New Roman', Times, serif; color: #16140f; background: #fbf7ec">
+        <h1 style="font-size: 2.25rem; margin: 0 0 0.75rem">Scholarly: check your research paper before you submit</h1>
+        <p>
+          Scholarly is a free AI research and academic integrity copilot. Upload your paper or essay as a PDF or Word file
+          and get a full review in a couple of minutes.
+        </p>
+        <ul>
+          <li><strong>Consistency checks:</strong> catch contradictions in numbers, datasets, methods and models between sections.</li>
+          <li><strong>Writing suggestions:</strong> clearer, more academic wording that keeps your meaning.</li>
+          <li><strong>Citation gaps:</strong> find strong claims that need a source.</li>
+          <li><strong>Similarity check:</strong> compare your text with published research from OpenAlex and CORE.</li>
+          <li><strong>AI-content detection:</strong> estimate how much of the text reads as AI-generated.</li>
+          <li><strong>Ask My Paper:</strong> ask questions about your own paper, like a practice viva.</li>
+        </ul>
+        <p>Your paper stays in your browser. Our server analyzes it and keeps no copy.</p>
+        <p>
+          <a href="/about">About &amp; Contact</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a>
+        </p>
+        <noscript><p>Please enable JavaScript to upload and analyze a paper.</p></noscript>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

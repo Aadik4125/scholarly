@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import { trackEvent } from '../lib/analytics'
+import { track } from '../lib/analytics'
 
 interface AuthContextValue {
   user: User | null
@@ -26,7 +26,7 @@ function maybeTrackSignUp(user: User) {
   } catch {
     /* fall through and track anyway */
   }
-  trackEvent('sign_up', { method: 'Google' })
+  track('sign_up', { method: 'Google' })
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

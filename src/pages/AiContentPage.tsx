@@ -6,10 +6,11 @@ import Meter from '../components/Meter'
 import CountUp from '../components/CountUp'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
 import type { AiContentSection } from '../types'
+import { aiVerdict, LIKELY_AI, VERDICT_TEXT } from '../lib/aiVerdict'
 
 // Sentence bands for highlighting. The server counts a sentence toward the overall score at
 // >= 0.5; the stronger band just makes the most confident flags stand out.
-const LIKELY = 0.5
+const LIKELY = LIKELY_AI
 const VERY_LIKELY = 0.8
 
 function sentenceClass(score: number) {
@@ -44,7 +45,11 @@ export default function AiContentPage() {
 
   const totals = useMemo(() => {
     const sentences = result?.sections.flatMap((s) => s.sentences) ?? []
-    return { total: sentences.length, flagged: sentences.filter((s) => s.score >= LIKELY).length }
+    return {
+      total: sentences.length,
+      flagged: sentences.filter((s) => s.score >= LIKELY).length,
+      verdict: aiVerdict(result?.sections ?? []),
+    }
   }, [result])
 
   if (!paper) return null
@@ -66,8 +71,8 @@ export default function AiContentPage() {
       title = 'AI-content check failed'
       body = result.warning
     } else if (result) {
-      title = 'No AI-content detector connected'
-      body = 'Add SAPLING_API_KEY to the server environment, then re-upload the paper.'
+      title = 'AI-content model not installed'
+      body = 'The server is missing its AI-content model files. Run `npm run fetch-models` on the server, then re-upload the paper.'
     }
     return (
       <div>
@@ -89,6 +94,17 @@ export default function AiContentPage() {
     <div>
       {header}
 
+      <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-blue px-5 py-4">
+        <span className="ink-border shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-bold tracking-wide text-ink uppercase">
+          Beta
+        </span>
+        <p className="text-sm text-ink-on-sticky">
+          Updated November 2026 for current AI models (Claude 5, GPT-5). It catches most text that AI wrote
+          from scratch. Text an AI wrote around your own results and numbers is harder to catch, so &ldquo;no clear
+          signs&rdquo; is not proof that a paper was written by a person.
+        </p>
+      </div>
+
       {result.warning && (
         <div className="ink-border mb-6 flex items-start gap-2.5 rounded-2xl bg-sticky-yellow px-5 py-4">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-ink-on-sticky" />
@@ -102,16 +118,39 @@ export default function AiContentPage() {
           animate={{ opacity: 1, y: 0 }}
           className="ink-border card-pop flex flex-col justify-center rounded-3xl bg-surface p-6 shadow-[var(--shadow-card)]"
         >
-          <p className="text-sm font-bold text-ink-2">Likely AI-generated text</p>
-          <p className="mt-1 font-display text-5xl text-ink">
-            <CountUp value={result.aiPercent} decimals={1} suffix="%" />
-          </p>
-          <div className="mt-5">
-            <Meter value={result.aiPercent} thresholds={{ warning: 20, critical: 50 }} />
+          <p className="text-sm font-bold text-ink-2">AI writing check</p>
+          <div className="mt-2 flex items-center gap-2.5">
+            <span
+              className={`ink-border h-4 w-4 shrink-0 rounded-full ${
+                totals.verdict.level === 'likely' ? 'bg-sticky-pink' : totals.verdict.level === 'some' ? 'bg-sticky-yellow' : 'bg-sticky-green'
+              }`}
+            />
+            <p className="font-display text-2xl leading-tight text-ink">{VERDICT_TEXT[totals.verdict.level].title}</p>
           </div>
-          <p className="mt-3 text-xs font-semibold text-ink-muted">
-            {totals.flagged} of {totals.total} sentences flagged
-          </p>
+          {totals.verdict.passages.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-bold tracking-wide text-ink-muted uppercase">Strongest passages</p>
+              <ul className="mt-1.5 space-y-1 text-sm text-ink-2">
+                {totals.verdict.passages.slice(0, 4).map((p) => (
+                  <li key={p.heading}>
+                    <span className="font-bold">{p.heading}</span> &middot; {p.flagged} of {p.sentences} sentences
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="mt-4 border-t-[1.5px] border-dashed border-line-soft pt-4">
+            <p className="text-sm font-bold text-ink-2">
+              <CountUp value={result.aiPercent} decimals={1} suffix="%" /> of the whole paper
+            </p>
+            <div className="mt-2">
+              <Meter value={result.aiPercent} thresholds={{ warning: 20, critical: 50 }} />
+            </div>
+            <p className="mt-2 text-xs text-ink-muted">
+              {totals.flagged} of {totals.total} sentences flagged. AI-written passages can be a small share of a
+              paper, so the verdict above looks at where flagged sentences cluster, not at this average.
+            </p>
+          </div>
         </motion.div>
 
         <div className="ink-border card-pop rounded-3xl bg-surface p-6 shadow-[var(--shadow-card)] lg:col-span-2">
@@ -121,12 +160,17 @@ export default function AiContentPage() {
           </div>
           <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-ink-2">
             <li>
-              The score is the share of your text in sentences the detector rates as more likely AI-written than not.
-              It is a statistical estimate, not proof of how the paper was written.
+              The verdict is based on passages where most sentences are flagged. On 135 human-written papers it
+              said &ldquo;likely&rdquo; for 2%; on fully AI-written papers, every time. It is a statistical estimate, not
+              proof of how the paper was written.
             </li>
             <li>
               Detectors can flag human writing — especially formal, formulaic passages (methods, definitions) and
               text by non-native English writers. Review the highlighted passages rather than relying on the number.
+            </li>
+            <li>
+              Sentences are judged in groups of three, so a highlighted sentence reflects its neighbours too. Very short
+              sections are skipped.
             </li>
             <li>
               This checks your paper as uploaded. Accepting Scholarly&rsquo;s writing suggestions (which are

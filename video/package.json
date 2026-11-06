@@ -1,0 +1,25 @@
+{
+  "name": "scholarly-video",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render ScholarlyAd out/scholarly-ad.mp4",
+    "render:vertical": "remotion render ScholarlyAdVertical out/scholarly-ad-vertical.mp4",
+    "render:all": "npm run render && npm run render:vertical",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.538",
+    "@remotion/google-fonts": "4.0.538",
+    "lucide-react": "1.49.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.538"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  }
+}

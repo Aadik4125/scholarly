@@ -39,9 +39,14 @@ export interface SimilaritySource {
   authors: string
   matchPercent: number
   matchedExcerpt: string
-  /** 'fulltext' = matchPercent of the passage's 5-word sequences appear in the source's full text.
-   *  'semantic' = the passage closely paraphrases the source's abstract. Absent on demo data. */
+  /** 'fulltext' = matchPercent of the passage's 5-word sequences appear in the source (word for
+   *  word). 'semantic' = the passage restates the source in other words, confirmed by Claude;
+   *  matchPercent is the meaning similarity. Absent on demo data. */
   matchType?: 'fulltext' | 'semantic'
+  /** The source's passage that matchedExcerpt matched, shown side by side. */
+  sourceExcerpt?: string
+  /** How many of the paper's passages matched this source. */
+  passageCount?: number
 }
 
 export interface CitationGap {
@@ -111,6 +116,8 @@ export interface AiContentResult {
   aiPercent: number
   sections: AiContentSection[]
   warning: string | null
+  /** Which detector produced the scores, e.g. "detector-v1-tfidf" or "sapling". */
+  modelVersion?: string
 }
 
 export interface Paper {
@@ -149,7 +156,14 @@ export interface Paper {
   /** Set when OpenAlex/CORE searches failed on some or all passages (e.g. rate limits), so the
    *  score covers fewer passages than intended — or none. 'ai' mode only. */
   similarityWarning?: string | null
+  /** The overall similarity split by kind of match. 'ai' mode only. */
+  similarityBreakdown?: { copiedPercent: number; rewordedPercent: number }
+  /** What the similarity check actually covered. 'ai' mode only. */
+  similarityStats?: { passagesChecked: number; papersFound: number; fullTextsCompared: string[]; rewordingReviewed: number }
   /** AI-generated-text likelihood from the detector (Sapling). 'ai' mode only; absent on
    *  papers analyzed before this check existed. */
   aiContent?: AiContentResult
+  /** AI-reviewed checks that could not run on this paper (e.g. 'consistency', 'writing'), while
+   *  the rest of the analysis did. 'ai' mode only. */
+  unavailableChecks?: string[]
 }
