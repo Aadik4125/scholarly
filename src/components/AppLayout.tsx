@@ -1,3 +1,4 @@
+import AccountMenu from './AccountMenu'
 import { useEffect } from 'react'
 import { NavLink, Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -101,6 +102,8 @@ function AppLayoutInner({ paperId }: { paperId: string }) {
           >
             {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
+
+          <AccountMenu />
 
           <NavLink
             to="/"

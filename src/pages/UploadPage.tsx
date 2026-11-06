@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -17,7 +17,12 @@ import {
 import { useTheme } from '../hooks/useTheme'
 import { useSessionFile } from '../hooks/useSessionFile'
 import { useToast } from '../hooks/useToast'
-import { analyzePaperWithAI } from '../lib/aiEngine'
+import { analyzePaperWithAI, SignUpRequiredError } from '../lib/aiEngine'
+import { useAuth } from '../hooks/useAuth'
+import { hasUsedFreeAnalysis } from '../lib/usage'
+import { stashPendingUpload, takePendingUpload, clearPendingUpload } from '../lib/pendingUpload'
+import SignInModal from '../components/SignInModal'
+import AccountMenu from '../components/AccountMenu'
 import { savePaper, listPapers, deletePaper, type PaperSummary } from '../lib/paperDb'
 import StickyTag from '../components/StickyTag'
 import Polaroid from '../components/Polaroid'
@@ -44,6 +49,10 @@ export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false)
   const [fileName, setFileName] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(-1)
+
+  const { user, loading: authLoading } = useAuth()
+  const [signInFile, setSignInFile] = useState<File | null>(null)
+  const resumedRef = useRef(false)
 
   const [papers, setPapers] = useState<PaperSummary[]>([])
 
@@ -73,6 +82,13 @@ export default function UploadPage() {
 
   const handleRealFile = useCallback(
     async (file: File) => {
+      // After the one free analysis, ask for a Google sign-in first and park the file so the
+      // upload continues automatically when the visitor comes back signed in.
+      if (!user && hasUsedFreeAnalysis()) {
+        await stashPendingUpload(file)
+        setSignInFile(file)
+        return
+      }
       setSessionFile(file)
       setFileName(file.name)
       setStepIndex(0)
@@ -83,13 +99,28 @@ export default function UploadPage() {
         navigate(`/paper/${id}`)
       } catch (err) {
         console.error(err)
-        push(err instanceof Error ? err.message : 'Analysis failed. Check the server and API keys.', 'neutral')
+        if (err instanceof SignUpRequiredError) {
+          await stashPendingUpload(file)
+          setSignInFile(file)
+        } else {
+          push(err instanceof Error ? err.message : 'Analysis failed. Check the server and API keys.', 'neutral')
+        }
         setFileName(null)
         setStepIndex(-1)
       }
     },
-    [setSessionFile, navigate, push],
+    [user, setSessionFile, navigate, push],
   )
+
+  // Returning from Google sign-in: pick the parked upload back up.
+  useEffect(() => {
+    if (authLoading || !user || resumedRef.current) return
+    resumedRef.current = true
+    takePendingUpload().then((file) => {
+      if (file) void handleRealFile(file)
+    })
+  }, [authLoading, user, handleRealFile])
+
   const handleSample = useCallback(() => {
     setSessionFile(null)
     runDemoProcessing('dropout-prediction-draft3.pdf')
@@ -104,13 +135,16 @@ export default function UploadPage() {
           </span>
           <span className="font-display text-xl tracking-wide text-ink">SCHOLARLY</span>
         </div>
-        <button
-          onClick={toggle}
-          className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-surface text-ink hover:bg-surface-hover"
-          title="Toggle theme"
-        >
-          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggle}
+            className="ink-border flex h-9 w-9 items-center justify-center rounded-full bg-surface text-ink hover:bg-surface-hover"
+            title="Toggle theme"
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <AccountMenu />
+        </div>
       </header>
 
       <main className="relative mx-auto max-w-3xl px-6 pt-6 pb-24 text-center">
@@ -234,7 +268,8 @@ export default function UploadPage() {
         <p className="mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
           Privacy: your paper's text is sent to Anthropic (Claude), OpenAI and Sapling (AI-content detection) for
           analysis, and short passages are searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
-          file are saved only in this browser, and you can remove them below at any time.
+          file are saved only in this browser, and you can remove them below at any time. If you sign in we store your
+          name and email — see our <Link to="/privacy" className="underline">Privacy Policy</Link> and <Link to="/terms" className="underline">Terms</Link>.
         </p>
 
         {papers.length > 0 && !isProcessing && (
@@ -294,6 +329,15 @@ export default function UploadPage() {
           </Polaroid>
         </motion.div>
       </main>
+
+      <SignInModal
+        open={signInFile !== null}
+        fileName={signInFile?.name}
+        onClose={() => {
+          setSignInFile(null)
+          void clearPendingUpload()
+        }}
+      />
     </div>
   )
 }

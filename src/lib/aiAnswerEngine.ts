@@ -1,9 +1,10 @@
 import type { Paper } from '../types'
+import { apiHeaders } from './apiHeaders'
 
 export async function getAIAnswer(paper: Paper, question: string): Promise<{ content: string; groundedIn?: string[] }> {
   const res = await fetch('/api/ask', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await apiHeaders(),
     body: JSON.stringify({
       fileName: paper.fileName,
       title: paper.title,

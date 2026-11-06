@@ -71,6 +71,93 @@ const askPerIp = rateLimit({
   message: limitMessage('You have reached the hourly question limit. Please try again later.'),
 })
 
+// --- Accounts and usage -------------------------------------------------------------------
+// Sign-in is Google via Supabase. The browser sends its Supabase access token; the server asks
+// Supabase who it belongs to (no secret key needed — the publishable key is enough). Visitors
+// without an account get one free analysis per browser (X-Anon-Id) plus a small per-IP cap so
+// private windows cannot give unlimited analyses; signed-in users get a daily limit.
+// Counters are in memory: they reset on a server restart, which only ever errs in the user's favour.
+const SUPABASE_URL = (process.env.SUPABASE_URL || 'https://eevyickklkpxhusbudim.supabase.co').replace(/\/$/, '')
+const SUPABASE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_AjPc2wC8y8m_n60XcOT2Yg_Sb5oJsNU'
+const USER_LIMIT_PER_DAY = Number(process.env.USER_ANALYZE_LIMIT_PER_DAY || 10)
+const ANON_LIMIT_PER_IP_PER_DAY = Number(process.env.ANON_ANALYZE_LIMIT_PER_IP_PER_DAY || 2)
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const tokenCache = new Map() // access token -> { user, expires }
+async function userFromToken(token) {
+  const hit = tokenCache.get(token)
+  if (hit && hit.expires > Date.now()) return hit.user
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!r.ok) return null
+    const u = await r.json()
+    if (!u?.id) return null
+    const user = { id: u.id, email: u.email }
+    tokenCache.set(token, { user, expires: Date.now() + 5 * 60 * 1000 })
+    return user
+  } catch (err) {
+    console.error('[server] could not verify the Supabase token:', err.message)
+    return null
+  }
+}
+
+const anonUsed = new Map() // anon id -> timestamp of its free analysis
+const windowCounts = new Map() // "user:<id>" / "ip:<ip>" -> [timestamps within the last day]
+function countInWindow(key) {
+  const now = Date.now()
+  const list = (windowCounts.get(key) || []).filter((t) => now - t < DAY_MS)
+  windowCounts.set(key, list)
+  return list
+}
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, t] of anonUsed) if (now - t > 30 * DAY_MS) anonUsed.delete(k)
+  for (const k of windowCounts.keys()) countInWindow(k)
+  for (const [k, v] of tokenCache) if (v.expires < now) tokenCache.delete(k)
+  for (const [k, list] of windowCounts) if (!list.length) windowCounts.delete(k)
+}, 10 * 60 * 1000).unref()
+
+/** Allows an analysis for a signed-in user (daily limit) or one free analysis per anonymous
+ *  browser; reserves the slot up front and gives it back if the request ends in an error. */
+async function usageGate(req, res, next) {
+  const bearer = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '')
+  const user = bearer ? await userFromToken(bearer[1]) : null
+  const signUpRequired = () =>
+    res.status(401).json({ code: 'signup_required', error: 'Your free analysis has been used. Sign in with Google to keep analysing papers.' })
+
+  let key
+  if (user) {
+    key = `user:${user.id}`
+    if (countInWindow(key).length >= USER_LIMIT_PER_DAY) {
+      return res.status(429).json({ error: `You have reached your daily limit of ${USER_LIMIT_PER_DAY} analyses. Please try again tomorrow.` })
+    }
+    windowCounts.get(key).push(Date.now())
+    res.on('finish', () => {
+      if (res.statusCode >= 400) {
+        const list = windowCounts.get(key)
+        list?.pop()
+      }
+    })
+    return next()
+  }
+
+  const anonId = (req.get('x-anon-id') || '').slice(0, 64)
+  key = `ip:${req.ip}`
+  if (!anonId || anonUsed.has(anonId) || countInWindow(key).length >= ANON_LIMIT_PER_IP_PER_DAY) return signUpRequired()
+  anonUsed.set(anonId, Date.now())
+  windowCounts.get(key).push(Date.now())
+  res.on('finish', () => {
+    if (res.statusCode >= 400) {
+      anonUsed.delete(anonId)
+      windowCounts.get(key)?.pop()
+    }
+  })
+  next()
+}
+
 // Prototype-level cost guard: cap how much raw document text any single call sends.
 const MAX_CHARS = 20000
 function clip(text) {
@@ -561,8 +648,19 @@ async function compareAgainstFullTexts(chunks, candidateVotes) {
  *    full text fetched, and every chunk is compared against it by shared 5-word sequences —
  *    the check that catches copying from the body of an open-access paper.
  *  The score is the share of the paper's chunks flagged by any check. */
-async function checkExternalSimilarity(sections) {
+async function checkExternalSimilarity(allSections, fileName = '') {
   if (!openai) return { checked: false, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: null }
+
+  // Reference lists share long runs of citation text with every paper that cites the same
+  // works, so they would read as copying; the paper's own published copy is not a source either.
+  const sections = allSections.filter((s) => !REFERENCE_HEADING.test(s.heading))
+  const normTitle = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const selfTitles = [normTitle(fileName.replace(/\.(pdf|docx?|txt)$/i, ''))]
+  const opening = normTitle((allSections[0]?.text || '').slice(0, 400))
+  const isSelf = (title) => {
+    const t = normTitle(title)
+    return t.length > 12 && (selfTitles.includes(t) || opening.includes(t))
+  }
 
   const CHUNK_WORDS = 60
   const SEMANTIC_PASSAGES = 30
@@ -607,7 +705,7 @@ async function checkExternalSimilarity(sections) {
     if (openAlexOutcome.status === 'rejected' && !coreSearched) return { searched: false }
 
     const ok = (outcome) => (outcome.status === 'fulfilled' && outcome.value ? outcome.value : [])
-    const found = dedupeCandidates([...ok(coreOutcome), ...ok(openAlexOutcome)])
+    const found = dedupeCandidates([...ok(coreOutcome), ...ok(openAlexOutcome)]).filter((c) => !isSelf(c.title))
     for (const c of found) {
       const key = c.title.toLowerCase().trim()
       const vote = candidateVotes.get(key)
@@ -671,6 +769,12 @@ async function checkExternalSimilarity(sections) {
       vote.candidate = dedupeCandidates([vote.candidate, candidate])[0]
     }
   }
+  for (const [key, vote] of candidateVotes) {
+    if (isSelf(vote.candidate.title)) {
+      console.log(`[server] ignoring the paper's own published copy: ${vote.candidate.title}`)
+      candidateVotes.delete(key)
+    }
+  }
   const semanticByChunk = new Map(sampled.map((c, i) => [c, semanticResults[i]]))
   let fullTextMatches = new Map()
   try {
@@ -687,6 +791,8 @@ async function checkExternalSimilarity(sections) {
     const fullText = fullTextMatches.get(chunk)
     if (!phraseChecked && !semantic?.searched && !fullText) continue
     checkedChunks += 1
+    const hit = fullText ? ['fulltext', fullText.candidate.title, fullText.overlap] : semantic?.source ? ['semantic', semantic.source.title, semantic.source.matchPercent / 100] : null
+    if (hit) console.log(`[server] similarity hit (${hit[0]}, ${(hit[2] * 100).toFixed(0)}%) "${hit[1]}": ${chunk.text.slice(0, 80)}…`)
     if (fullText) {
       matched.push({
         id: nextId('sim'),
@@ -700,6 +806,11 @@ async function checkExternalSimilarity(sections) {
       matched.push({ id: nextId('sim'), ...semantic.source })
     }
   }
+
+  console.log(`[server] similarity: ${matched.length} of ${checkedChunks} checked chunks flagged (${chunks.length} total, ${allSections.length - sections.length} reference sections skipped)`)
+  const perSource = new Map()
+  for (const m of matched) perSource.set(m.title, (perSource.get(m.title) || 0) + 1)
+  console.log('[server] flagged chunks per source:', Object.fromEntries([...perSource].sort((a, b) => b[1] - a[1]).slice(0, 8)))
 
   // Search failures are reported rather than folded into the score — a provider that errored
   // on every passage would otherwise read as "0% similar", which is a claim nobody checked.
@@ -740,6 +851,7 @@ const AI_DETECT_MAX_CHARS = Number(process.env.AI_DETECT_MAX_CHARS || 45000)
 const AI_DETECT_MIN_SECTION_CHARS = 200
 const AI_SENTENCE_THRESHOLD = 0.5
 const AI_DETECT_SKIP_HEADING = /reference|bibliograph|acknowledg|works cited/i
+const REFERENCE_HEADING = /reference|bibliograph|works cited/i
 
 /** Cuts text to at most maxChars, ending on a sentence boundary when one is reasonably close. */
 function clipAtSentence(text, maxChars) {
@@ -884,7 +996,7 @@ async function checkSelfSimilarity(sections) {
   }
 }
 
-app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
+app.post('/api/analyze', usageGate, analyzePerIp, analyzeDaily, async (req, res) => {
   try {
     const { fileName, fullText, sections } = req.body
     if (!fullText || !Array.isArray(sections)) {
@@ -911,7 +1023,7 @@ app.post('/api/analyze', analyzePerIp, analyzeDaily, async (req, res) => {
         userText: `File: ${fileName}\n\n${sectionText}`,
         tool: writingTool,
       })),
-      timed('external similarity', checkExternalSimilarity(sections)),
+      timed('external similarity', checkExternalSimilarity(sections, fileName)),
       timed('internal repetition', checkSelfSimilarity(sections)),
       timed('AI-content detection', checkAiContent(sections).catch((err) => {
         console.error('[server] AI-content detection crashed, continuing without it:', err)

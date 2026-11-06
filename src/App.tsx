@@ -9,6 +9,8 @@ import SimilarityPage from './pages/SimilarityPage'
 import NoveltyPage from './pages/NoveltyPage'
 import VersionsPage from './pages/VersionsPage'
 import AiContentPage from './pages/AiContentPage'
+import { PrivacyPage, TermsPage } from './pages/LegalPages'
+import { AuthProvider } from './hooks/useAuth'
 import { ThemeProvider } from './hooks/useTheme'
 import { ToastProvider } from './hooks/useToast'
 import { SessionFileProvider } from './hooks/useSessionFile'
@@ -18,6 +20,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
+        <AuthProvider>
         <SessionFileProvider>
           <BackgroundDoodles />
           <div className="relative z-10">
@@ -34,11 +37,14 @@ export default function App() {
                   <Route path="novelty" element={<NoveltyPage />} />
                   <Route path="versions" element={<VersionsPage />} />
                 </Route>
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/terms" element={<TermsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </BrowserRouter>
           </div>
         </SessionFileProvider>
+        </AuthProvider>
       </ToastProvider>
     </ThemeProvider>
   )

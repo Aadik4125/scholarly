@@ -1,5 +1,15 @@
 import { extractDocument } from './textExtraction'
 import type { Paper, PaperSection } from '../types'
+import { apiHeaders } from './apiHeaders'
+import { markFreeAnalysisUsed } from './usage'
+
+/** Thrown when the server requires an account before it will run another analysis. */
+export class SignUpRequiredError extends Error {
+  constructor(message = 'Sign in to keep analysing papers.') {
+    super(message)
+    this.name = 'SignUpRequiredError'
+  }
+}
 
 function prettifyTitle(fileName: string): string {
   const base = fileName.replace(/\.(pdf|docx?|txt)$/i, '')
@@ -36,14 +46,16 @@ export async function analyzePaperWithAI(file: File, onStage?: (stage: number) =
   onStage?.(1)
   const res = await fetch('/api/analyze', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await apiHeaders(),
     body: JSON.stringify({ fileName: file.name, fullText: extracted.fullText, sections: extracted.sections }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
+    if (body.code === 'signup_required') throw new SignUpRequiredError(body.error)
     throw new Error(body.error || `Analysis request failed (${res.status})`)
   }
   const data: AnalyzeResponse = await res.json()
+  markFreeAnalysisUsed()
 
   onStage?.(2)
   const sections: PaperSection[] = extracted.sections.map((s, i) => ({
