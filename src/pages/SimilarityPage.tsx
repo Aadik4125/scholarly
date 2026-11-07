@@ -1,12 +1,16 @@
 import { motion } from 'framer-motion'
-import { AlertTriangle, PlugZap, Copy } from 'lucide-react'
+import { useMemo } from 'react'
+import { AlertTriangle, PlugZap, Copy, Link2, CheckCircle2, Info } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import Meter from '../components/Meter'
 import CountUp from '../components/CountUp'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
+import { checkCrossReferences } from '../lib/crossReferences'
 
 export default function SimilarityPage() {
   const { paper } = useCurrentPaper()
+  // Computed from the extracted text, so papers analysed before this check existed get it too.
+  const crossRefs = useMemo(() => (paper?.fullText ? checkCrossReferences(paper.fullText) : null), [paper?.fullText])
   if (!paper) return null
 
   const corpusChecked = paper.analysisMode === 'ai' && paper.similarityCorpusChecked === true
@@ -200,6 +204,8 @@ export default function SimilarityPage() {
         </div>
       </div>
 
+      {crossRefs && <CrossReferencesCard report={crossRefs} />}
+
       {paper.analysisMode === 'ai' && (
         <div className="ink-border card-pop mt-6 rounded-3xl bg-surface shadow-[var(--shadow-card)]">
           <div className="flex items-center gap-2 border-b-[1.5px] border-line px-5 py-4">
@@ -231,6 +237,49 @@ export default function SimilarityPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function CrossReferencesCard({ report }: { report: ReturnType<typeof checkCrossReferences> }) {
+  const { counts, issues } = report
+  const checked = [
+    counts.figures && `${counts.figures} figure${counts.figures === 1 ? '' : 's'}`,
+    counts.tables && `${counts.tables} table${counts.tables === 1 ? '' : 's'}`,
+    counts.citations && `${counts.citations} citation${counts.citations === 1 ? '' : 's'}`,
+  ].filter(Boolean)
+  return (
+    <div className="ink-border card-pop mt-6 rounded-3xl bg-surface shadow-[var(--shadow-card)]">
+      <div className="flex items-center gap-2 border-b-[1.5px] border-line px-5 py-4">
+        <Link2 size={16} className="text-ink-muted" />
+        <h2 className="font-display text-lg tracking-wide text-ink uppercase">Cross-references</h2>
+      </div>
+      <p className="px-5 pt-4 text-xs text-ink-muted">
+        {checked.length
+          ? `Checked the ${checked.join(', ').replace(/, ([^,]*)$/, ' and $1')} your paper mentions against its captions and reference list.`
+          : 'No figure, table or citation references were found to check.'}
+      </p>
+      <div className="divide-y-[1.5px] divide-line">
+        {issues.map((i) => (
+          <div key={i.id} className="flex items-start gap-3 px-5 py-4">
+            {i.severity === 'medium' ? (
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+            ) : (
+              <Info size={16} className="mt-0.5 shrink-0 text-ink-muted" />
+            )}
+            <div>
+              <p className="text-sm font-bold text-ink">{i.title}</p>
+              <p className="mt-0.5 text-sm text-ink-2">{i.detail}</p>
+            </div>
+          </div>
+        ))}
+        {issues.length === 0 && checked.length > 0 && (
+          <p className="flex items-center justify-center gap-2 px-5 py-8 text-center text-sm text-ink-muted">
+            <CheckCircle2 size={16} className="text-green-600" />
+            Everything matches: each figure, table and citation you mention exists.
+          </p>
+        )}
+      </div>
     </div>
   )
 }

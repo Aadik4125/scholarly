@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.js",
     "fetch-models": "node scripts/fetch-models.mjs",
-    "test:detector": "node --test server/aiDetector/*.test.js"
+    "test:detector": "node --test server/aiDetector/*.test.js",
+    "test:xref": "node --experimental-strip-types --no-warnings --test src/lib/crossReferences.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
