@@ -54,7 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = useCallback(async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${window.location.origin}/` },
+      // Come back to the page the visitor signed in from (the home page for the upload flow).
+      options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
     })
     if (error) throw error
   }, [])

@@ -3,7 +3,21 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { X, Loader2 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 
-export default function SignInModal({ open, fileName, onClose }: { open: boolean; fileName?: string | null; onClose: () => void }) {
+/**
+ * `required`: shown when a signed-out visitor starts a second analysis.
+ * `optional`: opened from the header "Sign in" button; signing in is never needed for the first analysis.
+ */
+export default function SignInModal({
+  open,
+  fileName,
+  onClose,
+  mode = 'required',
+}: {
+  open: boolean
+  fileName?: string | null
+  onClose: () => void
+  mode?: 'required' | 'optional'
+}) {
   const { signInWithGoogle } = useAuth()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,11 +56,20 @@ export default function SignInModal({ open, fileName, onClose }: { open: boolean
             <button onClick={onClose} aria-label="Close" className="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full text-ink-muted hover:bg-surface-hover">
               <X size={16} />
             </button>
-            <h2 id="signin-title" className="font-display text-2xl tracking-wide text-ink">CREATE A FREE ACCOUNT</h2>
-            <p className="mt-3 text-sm text-ink-2">
-              Your first analysis was free. Sign up to keep analysing papers
-              {fileName ? <> — we'll continue with <b className="text-ink">{fileName}</b> right after.</> : '.'}
-            </p>
+            <h2 id="signin-title" className="font-display text-2xl tracking-wide text-ink">
+              {mode === 'optional' ? 'SIGN IN TO SCHOLARLY' : 'CREATE A FREE ACCOUNT'}
+            </h2>
+            {mode === 'optional' ? (
+              <p className="mt-3 text-sm text-ink-2">
+                Your first analysis doesn't need an account. Sign in now with Google and you won't be asked again for
+                your next paper.
+              </p>
+            ) : (
+              <p className="mt-3 text-sm text-ink-2">
+                Your first analysis was free. Sign up to keep analysing papers
+                {fileName ? <> — we'll continue with <b className="text-ink">{fileName}</b> right after.</> : '.'}
+              </p>
+            )}
             <button
               onClick={go}
               disabled={busy}
