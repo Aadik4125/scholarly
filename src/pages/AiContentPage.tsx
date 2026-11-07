@@ -147,8 +147,10 @@ export default function AiContentPage() {
               <Meter value={result.aiPercent} thresholds={{ warning: 20, critical: 50 }} />
             </div>
             <p className="mt-2 text-xs text-ink-muted">
-              {totals.flagged} of {totals.total} sentences flagged. AI-written passages can be a small share of a
-              paper, so the verdict above looks at where flagged sentences cluster, not at this average.
+              {totals.flagged} of {totals.total} sentences flagged.{' '}
+              {totals.verdict.shortText
+                ? 'For a text this short, the verdict above is based on this share of flagged sentences.'
+                : 'AI-written passages can be a small share of a paper, so the verdict above looks at where flagged sentences cluster, not at this average.'}
             </p>
           </div>
         </motion.div>
@@ -159,11 +161,19 @@ export default function AiContentPage() {
             <h2 className="font-display text-lg tracking-wide text-ink uppercase">How to read this</h2>
           </div>
           <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-ink-2">
-            <li>
-              The verdict is based on passages where most sentences are flagged. On 135 human-written papers it
-              said &ldquo;likely&rdquo; for 2%; on fully AI-written papers, every time. It is a statistical estimate, not
-              proof of how the paper was written.
-            </li>
+            {totals.verdict.shortText ? (
+              <li>
+                For short texts (up to 40 sentences) the verdict is based on the share of flagged sentences: 60% or more
+                reads as &ldquo;likely&rdquo;. On short human-written texts it said &ldquo;likely&rdquo; for about 1–2%. It is a
+                statistical estimate, not proof of how the text was written.
+              </li>
+            ) : (
+              <li>
+                The verdict is based on passages where most sentences are flagged. On 135 human-written papers it
+                said &ldquo;likely&rdquo; for 2%; on fully AI-written papers, every time. It is a statistical estimate, not
+                proof of how the paper was written.
+              </li>
+            )}
             <li>
               Detectors can flag human writing — especially formal, formulaic passages (methods, definitions) and
               text by non-native English writers. Review the highlighted passages rather than relying on the number.
