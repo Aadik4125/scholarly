@@ -14,10 +14,13 @@ export default function FeedbackButton() {
       // Counted in Google Analytics as a "feedback_click" event.
       onClick={() => (window as { gtag?: (...args: unknown[]) => void }).gtag?.('event', 'feedback_click')}
       style={{ transform: 'rotate(-2deg)' }}
-      className="ink-border fixed bottom-5 left-5 z-40 inline-flex items-center gap-2 rounded-full bg-sticky-yellow px-4 py-2 text-sm font-bold text-ink-on-sticky shadow-md transition-transform hover:-translate-y-0.5"
+      title="Give feedback"
+      aria-label="Give feedback"
+      // On phones it's a small round icon so it doesn't sit on top of the page text.
+      className="ink-border fixed bottom-4 left-4 z-40 inline-flex h-10 w-10 items-center justify-center gap-2 rounded-full bg-sticky-yellow text-sm font-bold text-ink-on-sticky shadow-md transition-transform hover:-translate-y-0.5 sm:bottom-5 sm:left-5 sm:h-auto sm:w-auto sm:px-4 sm:py-2"
     >
       <MessageSquareHeart size={16} strokeWidth={2.5} />
-      Give feedback
+      <span className="hidden sm:inline">Give feedback</span>
     </a>
   )
 }

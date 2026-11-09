@@ -13,6 +13,7 @@ import {
   Sun,
   ArrowRight,
   Trash2,
+  Lock,
 } from 'lucide-react'
 import { useTheme } from '../hooks/useTheme'
 import { useSessionFile } from '../hooks/useSessionFile'
@@ -173,12 +174,12 @@ export default function UploadPage() {
 
       <main className="relative mx-auto max-w-3xl px-6 pt-6 pb-24 text-center">
         <div aria-hidden className="pointer-events-none absolute inset-x-0 top-10 flex justify-center">
-          <div className="relative h-0 w-full max-w-xl">
-            <div className="absolute -left-4 top-6 hidden sm:block">
-              <StickyTag color="green" rotate={-6}>✦ no project form</StickyTag>
+          <div className="relative h-0 w-full max-w-3xl">
+            <div className="absolute -top-3 left-6 hidden sm:block">
+              <StickyTag color="green" rotate={-6}>✦ 250M+ papers searched</StickyTag>
             </div>
-            <div className="absolute -right-2 top-0 hidden sm:block">
-              <StickyTag color="pink" rotate={6}>upload & go</StickyTag>
+            <div className="absolute -top-4 right-8 hidden sm:block">
+              <StickyTag color="pink" rotate={6}>results in 1–3 min</StickyTag>
             </div>
           </div>
         </div>
@@ -189,16 +190,18 @@ export default function UploadPage() {
           className="font-hand text-2xl text-ink-2"
           style={{ transform: 'rotate(-1.5deg)' }}
         >
-          one upload is all it takes
+          free · no sign-up for your first paper
         </motion.p>
 
         <motion.div
           initial={{ opacity: 0, scale: 0.97 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4, delay: 0.08 }}
-          className="ink-border mx-auto mt-3 inline-block rounded-2xl bg-surface px-6 py-3 shadow-[var(--shadow-card)]"
+          className="ink-border mx-auto mt-3 inline-block max-w-2xl rounded-2xl bg-surface px-6 py-4 shadow-[var(--shadow-card)]"
         >
-          <h1 className="font-display text-5xl tracking-wide text-ink sm:text-6xl">SCHOLARLY</h1>
+          <h1 className="font-display text-4xl leading-tight tracking-wide text-balance text-ink uppercase sm:text-5xl">
+            Check your paper before your reviewer does
+          </h1>
         </motion.div>
 
         <motion.p
@@ -207,7 +210,8 @@ export default function UploadPage() {
           transition={{ duration: 0.4, delay: 0.14 }}
           className="mx-auto mt-5 max-w-md text-ink-2"
         >
-          I check your paper for contradictions, missing citations, and shaky prose — then help you fix them. ✦
+          Plagiarism, AI-written text, contradictions, missing citations and writing fixes, from one upload in about
+          2 minutes. ✦
         </motion.p>
 
         <motion.div
@@ -236,7 +240,8 @@ export default function UploadPage() {
                 <UploadCloud size={32} className="text-ink-2" />
                 <p className="text-sm font-bold text-ink">Drag and drop your paper here</p>
                 <p className="text-xs text-ink-muted">PDF or DOCX, up to 40 pages</p>
-                <label className="ink-border mt-2 cursor-pointer rounded-full bg-ink px-5 py-2.5 text-sm font-bold text-paper shadow-[var(--shadow-pop)] transition-transform hover:-translate-y-0.5 active:translate-y-0">
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
+                <label className="ink-border cursor-pointer rounded-full bg-ink px-5 py-2.5 text-sm font-bold text-paper shadow-[var(--shadow-pop)] transition-transform hover:-translate-y-0.5 active:translate-y-0">
                   Browse files
                   <input
                     type="file"
@@ -254,10 +259,11 @@ export default function UploadPage() {
                 </label>
                 <button
                   onClick={handleSample}
-                  className="mt-1 font-hand text-lg text-ink-2 underline decoration-dotted underline-offset-4 hover:text-ink"
+                  className="ink-border rounded-full bg-surface px-5 py-2.5 text-sm font-bold text-ink transition-transform hover:-translate-y-0.5 hover:bg-surface-hover active:translate-y-0"
                 >
-                  or try it with a sample paper
+                  Try a sample paper
                 </button>
+                </div>
               </motion.div>
             ) : (
               <motion.div key="processing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full max-w-sm flex-col items-center gap-5">
@@ -293,11 +299,20 @@ export default function UploadPage() {
           </AnimatePresence>
         </motion.div>
 
-        <p className="mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
-          Privacy: your paper's text is sent to Anthropic (Claude) and OpenAI for analysis; AI-content detection
+        <details className="group mx-auto mt-4 max-w-xl text-xs leading-relaxed text-ink-muted">
+          <summary className="flex cursor-pointer list-none items-center justify-center gap-1.5 text-sm text-ink-2 [&::-webkit-details-marker]:hidden">
+            <Lock size={13} className="shrink-0" />
+            <span>
+              Your paper stays in your browser, and we keep no copy.{' '}
+              <span className="underline underline-offset-2 group-open:hidden">How it's checked</span>
+            </span>
+          </summary>
+          <p className="mt-2">
+          Your paper's text is sent to Anthropic (Claude) and OpenAI for analysis; AI-content detection
           runs on Scholarly's own model, on our server. Short passages are searched against OpenAlex and CORE to check similarity. Scholarly's server keeps no copy — results and the
           file are saved only in this browser, and you can remove them below at any time. If you sign in we store your name and email — see our <Link to="/privacy" className="underline">Privacy Policy</Link>.
-        </p>
+          </p>
+        </details>
 
         {papers.length > 0 && !isProcessing && (
           <motion.section
