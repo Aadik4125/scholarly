@@ -7,6 +7,7 @@ import SeverityBadge from '../components/SeverityBadge'
 import SeverityBar from '../components/SeverityBar'
 import Polaroid from '../components/Polaroid'
 import DocumentViewerCard from '../components/DocumentViewerCard'
+import DownloadReportButton from '../components/DownloadReportButton'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
 import type { Severity } from '../types'
 import { aiVerdict, VERDICT_TEXT } from '../lib/aiVerdict'
@@ -70,7 +71,7 @@ export default function OverviewPage() {
               : `${paper.pageCount} pages · ${paper.wordCount.toLocaleString()} words · uploaded ${new Date(paper.uploadedAt).toLocaleDateString()}`
           }
         />
-        <div className="mt-6 flex items-center gap-4 sm:mt-7">
+        <div className="mt-6 flex flex-wrap items-center gap-3 sm:mt-7">
           <Polaroid caption={truncateWords(paper.title, 18)} rotate={4} tape="blue" width={104} className="hidden md:block">
             <FileStack size={34} className="text-ink/60" />
           </Polaroid>
@@ -81,6 +82,7 @@ export default function OverviewPage() {
             Review findings
             <ArrowRight size={16} />
           </Link>
+          <DownloadReportButton paper={paper} from="overview" />
         </div>
       </div>
 

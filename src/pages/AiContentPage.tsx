@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, Info, PlugZap } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
+import DownloadReportButton from '../components/DownloadReportButton'
 import Meter from '../components/Meter'
 import CountUp from '../components/CountUp'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
@@ -59,6 +60,7 @@ export default function AiContentPage() {
       eyebrow="an indicator, not a verdict"
       title="AI Content"
       description="How likely each passage is to be AI-generated, according to an automated detector."
+      action={<DownloadReportButton paper={paper} from="ai-content" />}
     />
   )
 

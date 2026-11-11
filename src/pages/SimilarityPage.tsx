@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { useMemo } from 'react'
 import { AlertTriangle, PlugZap, Copy, Link2, CheckCircle2, Info } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
+import DownloadReportButton from '../components/DownloadReportButton'
 import Meter from '../components/Meter'
 import CountUp from '../components/CountUp'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
@@ -23,6 +24,7 @@ export default function SimilarityPage() {
         eyebrow="checked word for word and by meaning"
         title="Similarity & Citations"
         description="Your paper compared with 250M+ research papers from OpenAlex and CORE, for copied and reworded passages."
+        action={<DownloadReportButton paper={paper} from="similarity" />}
       />
 
       {paper.analysisMode === 'ai' && paper.similarityWarning && (
