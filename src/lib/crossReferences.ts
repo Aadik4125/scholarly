@@ -183,8 +183,9 @@ export function checkCrossReferences(fullText: string): CrossRefReport {
   if (refCount >= 3) {
     const cited = new Set<number>()
     let groups = 0
-    // Citations anywhere, appendix included, minus the list's own "[12] Author" entry markers.
-    const prose = fullText.replace(/(^|\s)\[\d{1,3}\](?=[ \t]+\p{Lu})/gmu, '$1')
+    // Citations anywhere, appendix included, minus the list's own "[12] Author" entry markers,
+    // which start a line. (Mid-line "[22] BETWEEN" in an all-caps caption is a citation.)
+    const prose = fullText.replace(/^(\s*)\[\d{1,3}\](?=[ \t]+\p{Lu})/gmu, '$1')
     for (const m of prose.matchAll(/\[(\d{1,3}(?:\s*(?:,|;|-|–|—)\s*\d{1,3})*)\]/g)) {
       const nums = expandList(m[1])
       if (nums.includes(0)) continue // [0, 1] is an interval, not a citation

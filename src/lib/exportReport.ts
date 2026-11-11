@@ -5,6 +5,8 @@ import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interface
 import type { AiContentSection, Paper } from '../types'
 import { aiVerdict, LIKELY_AI, VERDICT_TEXT } from './aiVerdict'
 import { checkCrossReferences } from './crossReferences'
+import { findInText } from './textMatch'
+import type { Mark } from './annotatePdf'
 
 const C = {
   ink: '#16202e',
@@ -14,8 +16,10 @@ const C = {
   panel: '#f4f6f9',
   likely: '#fbe7a1', // 50-80%: matches the site's yellow
   veryLikely: '#f6c1c7', // 80%+: matches the site's pink
-  copied: '#f6c1c7',
-  reworded: '#cfe2fb',
+  // Passages matching a published source: blue, so they never look like an AI highlight.
+  copied: '#9fc0f5',
+  reworded: '#cfe0fb',
+  source: '#b3cdf8',
   good: '#1f7a4d',
   warn: '#9a5b00',
   bad: '#b3261e',
@@ -27,6 +31,8 @@ export interface ReportMeta {
   generatedAt: Date
   /** SHA-256 of the extracted text, so a reader can confirm the report matches a file. */
   fingerprint: string | null
+  /** True when the user's own PDF, highlighted, is appended after these pages. */
+  annotatedOriginal?: boolean
 }
 
 const fmtDate = (d: Date | string) =>
@@ -35,21 +41,55 @@ const fmtDate = (d: Date | string) =>
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
-/** Section text split into runs, with each flagged sentence shaded by how likely it is AI. */
-function highlightedRuns(section: AiContentSection): Content[] {
-  const runs: Content[] = []
-  let at = 0
-  for (const s of [...section.sentences].sort((a, b) => a.start - b.start)) {
-    if (s.start < at) continue
-    if (s.start > at) runs.push({ text: section.text.slice(at, s.start) })
-    const text = section.text.slice(s.start, s.end)
-    if (s.score >= VERY_LIKELY_AI) runs.push({ text, background: C.veryLikely })
-    else if (s.score >= LIKELY_AI) runs.push({ text, background: C.likely })
-    else runs.push({ text })
-    at = s.end
+/** Where each matched source's passage sits in a section's text, as [start, end, source no.]. */
+function sourceRanges(section: AiContentSection, paper: Paper): Array<[number, number, number]> {
+  const out: Array<[number, number, number]> = []
+  ;(paper.similaritySources ?? []).forEach((src, i) => {
+    for (const [a, b] of findInText(section.text, src.matchedExcerpt)) out.push([a, b, i + 1])
+  })
+  return out
+}
+
+/** Section text split into runs: AI-flagged sentences shaded by likelihood, passages that match
+ *  a published source shaded blue with the source number. A source match wins where both apply. */
+function highlightedRuns(section: AiContentSection, paper: Paper): Content[] {
+  const text = section.text
+  const bg: Array<string | null> = new Array(text.length).fill(null)
+  for (const s of section.sentences) {
+    const color = s.score >= VERY_LIKELY_AI ? C.veryLikely : s.score >= LIKELY_AI ? C.likely : null
+    if (color) for (let i = s.start; i < Math.min(s.end, text.length); i++) bg[i] = color
   }
-  if (at < section.text.length) runs.push({ text: section.text.slice(at) })
+  const tagAt = new Map<number, number>()
+  for (const [a, b, n] of sourceRanges(section, paper)) {
+    for (let i = a; i < Math.min(b, text.length); i++) bg[i] = C.source
+    if (!tagAt.has(a)) tagAt.set(a, n)
+  }
+  const runs: Content[] = []
+  let i = 0
+  while (i < text.length) {
+    if (tagAt.has(i)) runs.push({ text: ` [${tagAt.get(i)}] `, bold: true, color: '#ffffff', background: '#2f5bd3', fontSize: 7.5 })
+    let j = i + 1
+    while (j < text.length && bg[j] === bg[i] && !tagAt.has(j)) j++
+    runs.push(bg[i] ? { text: text.slice(i, j), background: bg[i]! } : { text: text.slice(i, j) })
+    i = j
+  }
   return runs
+}
+
+function legend(withSources: boolean): Content {
+  const swatch = (color: string) => ({ width: 'auto' as const, canvas: [{ type: 'rect' as const, x: 0, y: 2, w: 10, h: 8, color }] })
+  return {
+    columns: [
+      swatch(C.likely),
+      { width: 'auto', text: `Likely AI (${LIKELY_AI * 100}–${VERY_LIKELY_AI * 100}%)`, margin: [4, 0, 14, 0] },
+      swatch(C.veryLikely),
+      { width: 'auto', text: `Very likely AI (${VERY_LIKELY_AI * 100}%+)`, margin: [4, 0, 14, 0] },
+      ...(withSources ? [swatch(C.source), { width: 'auto' as const, text: 'Matches a source [no.]', margin: [4, 0, 0, 0] as [number, number, number, number] }] : []),
+    ],
+    fontSize: 9,
+    color: C.ink2,
+    margin: [0, 0, 0, 10],
+  }
 }
 
 function statBox(label: string, value: string, note: string, color: string): Content {
@@ -254,45 +294,38 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
     })
   }
 
-  // ---- AI content, flagged sections with highlighted sentences
-  content.push(heading('AI content by section', true))
-  if (!aiChecked || !ai) content.push({ text: 'The AI-content check did not run for this paper.', style: 'empty' })
-  else {
-    content.push({
-      columns: [
-        { width: 'auto', canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 8, color: C.likely }] },
-        { width: 'auto', text: `Likely AI (${LIKELY_AI * 100}–${VERY_LIKELY_AI * 100}%)`, margin: [4, 0, 14, 0] },
-        { width: 'auto', canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 8, color: C.veryLikely }] },
-        { width: 'auto', text: `Very likely AI (${VERY_LIKELY_AI * 100}%+)`, margin: [4, 0, 0, 0] },
-      ],
-      fontSize: 9,
-      color: C.ink2,
-      margin: [0, 0, 0, 10],
-    })
-    const flaggedSections = ai.sections.filter((s) => s.sentences.some((x) => x.score >= LIKELY_AI))
-    if (flaggedSections.length === 0) content.push({ text: 'No passages were flagged as likely AI-generated.', style: 'empty' })
-    for (const section of flaggedSections) {
-      const n = section.sentences.filter((x) => x.score >= LIKELY_AI).length
-      content.push(
-        {
-          columns: [
-            { text: section.heading, bold: true, fontSize: 10 },
-            { text: `${n} of ${section.sentences.length} sentences flagged`, alignment: 'right', fontSize: 9, color: C.muted },
-          ],
-          margin: [0, 8, 0, 4],
-        },
-        { text: highlightedRuns(section), fontSize: 9.5, lineHeight: 1.35, color: C.ink },
-      )
+  // ---- The paper with highlights: the user's own PDF when we have it, otherwise the text.
+  const hasSources = corpusChecked && sources.length > 0
+  if (!meta.annotatedOriginal) {
+    content.push(heading('Your paper, highlighted', true))
+    if (!aiChecked && !hasSources) content.push({ text: 'Nothing to highlight: no AI-flagged sentences or source matches.', style: 'empty' })
+    else {
+      content.push(legend(hasSources))
+      const shown = (ai?.sections ?? []).filter((sec) => sec.sentences.some((x) => x.score >= LIKELY_AI) || sourceRanges(sec, paper).length > 0)
+      if (shown.length === 0) content.push({ text: 'No passages were flagged as AI-written or matched to a source.', style: 'empty' })
+      for (const section of shown) {
+        const n = section.sentences.filter((x) => x.score >= LIKELY_AI).length
+        content.push(
+          {
+            columns: [
+              { text: section.heading, bold: true, fontSize: 10 },
+              { text: `${n} of ${section.sentences.length} sentences flagged as AI`, alignment: 'right', fontSize: 9, color: C.muted },
+            ],
+            margin: [0, 8, 0, 4],
+          },
+          { text: highlightedRuns(section, paper), fontSize: 9.5, lineHeight: 1.35, color: C.ink },
+        )
+      }
+      const clean = (ai?.sections.length ?? 0) - shown.length
+      if (clean > 0 && shown.length > 0)
+        content.push({ text: `${plural(clean, 'other section')} had nothing highlighted.`, style: 'empty', margin: [0, 10, 0, 0] })
     }
-    const clean = ai.sections.length - flaggedSections.length
-    if (clean > 0 && flaggedSections.length > 0)
-      content.push({ text: `${plural(clean, 'other section')} had no flagged sentences.`, style: 'empty', margin: [0, 10, 0, 0] })
   }
 
   // ---- Citations and cross-references
   const hasCitationContent = paper.citationGaps.length > 0 || (crossRefs && crossRefs.issues.length > 0)
   if (hasCitationContent) {
-    content.push(heading('Citations and cross-references', true))
+    content.push(heading('Citations and cross-references'))
     if (paper.citationGaps.length)
       content.push(
         { text: 'Claims that may need a citation', bold: true, fontSize: 10, margin: [0, 0, 0, 4] },
@@ -312,6 +345,19 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
           color: C.ink2,
         },
       )
+  }
+
+  if (meta.annotatedOriginal) {
+    content.push(
+      heading('Your paper, highlighted'),
+      {
+        text: 'The pages that follow are your paper exactly as you uploaded it, with these highlights added. Numbers in the margin, like [1], refer to the matched sources listed earlier in this report.',
+        fontSize: 10,
+        color: C.ink2,
+        margin: [0, 0, 0, 10],
+      },
+      legend(hasSources),
+    )
   }
 
   return {
@@ -355,6 +401,30 @@ function newReportId(date: Date): string {
   return `SCH-${day}-${rand}`
 }
 
+/** Highlights for the user's own PDF: AI-flagged sentences and passages matching a source. */
+function reportMarks(paper: Paper): Mark[] {
+  const hex = (h: string): [number, number, number] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as [number, number, number]
+  const marks: Mark[] = []
+  for (const section of paper.aiContent?.checked ? paper.aiContent.sections : []) {
+    for (const s of section.sentences) {
+      if (s.score < LIKELY_AI) continue
+      marks.push({ text: section.text.slice(s.start, s.end), color: hex(s.score >= VERY_LIKELY_AI ? C.veryLikely : C.likely) })
+    }
+  }
+  // Sources last, so their blue sits on top where a passage is both.
+  ;(paper.similaritySources ?? []).forEach((src, i) => marks.push({ text: src.matchedExcerpt, color: hex(C.source), label: String(i + 1) }))
+  return marks
+}
+
+function saveFile(bytes: Uint8Array, fileName: string) {
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/pdf' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 export async function downloadIntegrityReport(paper: Paper): Promise<void> {
   const [pdfMakeModule, fontsModule] = await Promise.all([import('pdfmake/build/pdfmake'), import('pdfmake/build/vfs_fonts')])
   const pdfMake = ((pdfMakeModule as unknown as { default?: typeof pdfMakeModule }).default ?? pdfMakeModule) as typeof pdfMakeModule
@@ -368,5 +438,36 @@ export async function downloadIntegrityReport(paper: Paper): Promise<void> {
     fingerprint: paper.fullText ? await sha256(paper.fullText) : null,
   }
   const name = paper.title.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_|_$/g, '').slice(0, 60) || 'paper'
-  pdfMake.createPdf(buildReportDefinition(paper, meta)).download(`${name}_Scholarly_report.pdf`)
+  const fileName = `${name}_Scholarly_report.pdf`
+
+  // The user's own PDF with highlights, when this browser still has the file.
+  let annotated: Uint8Array | null = null
+  const marks = reportMarks(paper)
+  if (paper.analysisMode === 'ai' && /\.pdf$/i.test(paper.fileName) && marks.length) {
+    try {
+      const { getPaperBlob } = await import('./paperDb')
+      const blob = await getPaperBlob(paper.id)
+      if (blob && blob.size > 100) {
+        const { annotatePdf } = await import('./annotatePdf')
+        const result = await annotatePdf(await blob.arrayBuffer(), marks)
+        if (result.found > 0) annotated = result.bytes
+      }
+    } catch (err) {
+      console.warn('[report] could not highlight the original PDF; using the text version', err)
+    }
+  }
+  meta.annotatedOriginal = annotated !== null
+
+  const doc = pdfMake.createPdf(buildReportDefinition(paper, meta))
+  if (!annotated) {
+    doc.download(fileName)
+    return
+  }
+  const summary = await new Promise<Uint8Array>((resolve) => doc.getBuffer((buf: Uint8Array) => resolve(buf)))
+  const { PDFDocument } = await import('pdf-lib')
+  const merged = await PDFDocument.load(summary)
+  const original = await PDFDocument.load(annotated)
+  for (const page of await merged.copyPages(original, original.getPageIndices())) merged.addPage(page)
+  merged.setTitle(`Scholarly integrity report – ${paper.title}`)
+  saveFile(await merged.save(), fileName)
 }

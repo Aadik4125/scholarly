@@ -1,7 +1,11 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { pageLines, type PageItem } from './pdfLayout'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+// The annotated report reuses this configured instance.
+export { pdfjsLib }
 
 // pdf.js's page.getTextContent() reads a ReadableStream with `for await`, but Safari doesn't
 // support async iteration of ReadableStream — every PDF upload failed there with "undefined is
@@ -63,12 +67,21 @@ const SECTION_KEYWORDS = [
 
 const HEADING_LINE = /^\s*(?:[ivxlcdm]+\.|\d+(?:\.\d+)*\.?)?\s*([a-z][a-z\s/&-]{2,45})\s*$/i
 
+/** Small-caps headings often extract letter-spaced: "II. R ELATED W ORK" -> "II. RELATED WORK". */
+function unspaceSmallCaps(line: string): string {
+  return line.length <= 60 && line === line.toUpperCase() ? line.replace(/\b([A-Z]) (?=[A-Z]{2,})/g, '$1') : line
+}
+
 function looksLikeHeading(line: string): string | null {
-  const trimmed = line.trim()
+  const trimmed = unspaceSmallCaps(line.trim())
   if (trimmed.length < 3 || trimmed.length > 60) return null
   const match = trimmed.match(HEADING_LINE)
   if (!match) return null
   const words = match[1].toLowerCase().trim()
+  // A table's header row ("Method condition condition all condition drug") can contain a
+  // keyword, but real headings don't repeat a word.
+  const list = words.split(/\s+/)
+  if (new Set(list).size < list.length) return null
   const isKnown = SECTION_KEYWORDS.some((kw) => words.includes(kw))
   if (!isKnown) return null
   // match[1] is already just the heading word(s), with any real numbering prefix
@@ -88,6 +101,14 @@ function buildSectionsFromLines(lines: string[]): ExtractedSection[] {
   }
 
   for (const rawLine of lines) {
+    // IEEE style runs the abstract on from its heading: "Abstract—Medical named entity ..."
+    const inlineAbstract = rawLine.match(/^\s*abstract\s*[—–:.-]\s*(.+)$/i)
+    if (inlineAbstract) {
+      flush()
+      currentHeading = 'Abstract'
+      buffer.push(inlineAbstract[1].trim())
+      continue
+    }
     const heading = looksLikeHeading(rawLine)
     if (heading) {
       flush()
@@ -111,31 +132,15 @@ async function extractFromPdf(file: File): Promise<ExtractedDocument> {
     const page = await doc.getPage(i)
     const content = await page.getTextContent()
 
-    const rows = new Map<number, { x: number; str: string }[]>()
+    // Reading order, column by column on two-column pages (see pdfLayout.ts).
+    const items: PageItem[] = []
     for (const item of content.items) {
       if (!('str' in item) || !item.str.trim()) continue
-      const transform = item.transform as number[]
-      const y = Math.round(transform[5] / 3) * 3
-      const x = transform[4]
-      if (!rows.has(y)) rows.set(y, [])
-      rows.get(y)!.push({ x, str: item.str })
+      const t = item.transform as number[]
+      items.push({ str: item.str, x: t[4], y: t[5], width: item.width, height: Math.hypot(t[2], t[3]), rotated: t[1] !== 0 || t[2] !== 0 })
     }
-
-    const sortedY = Array.from(rows.keys()).sort((a, b) => b - a)
-    const pageLineTexts: string[] = []
-    for (const y of sortedY) {
-      const line = rows
-        .get(y)!
-        .sort((a, b) => a.x - b.x)
-        .map((r) => r.str)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      if (line) {
-        allLines.push(line)
-        pageLineTexts.push(line)
-      }
-    }
+    const pageLineTexts = pageLines(items, page.getViewport({ scale: 1 }).width)
+    allLines.push(...pageLineTexts)
     pageTexts.push(pageLineTexts.join('\n'))
   }
 
