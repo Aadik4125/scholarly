@@ -32,6 +32,8 @@ interface AnalyzeResponse {
   similaritySources: Paper['similaritySources']
   similarityWarning: string | null
   similarityBreakdown?: Paper['similarityBreakdown']
+  similarityWithoutReferencesPercent?: number
+  referenceCheck?: Paper['referenceCheck']
   similarityStats?: Paper['similarityStats']
   unavailableChecks?: string[]
   aiContent?: Paper['aiContent']
@@ -135,6 +137,8 @@ export async function analyzePaperWithAI(
     similarityCorpusChecked: data.similarityCorpusChecked,
     similarityWarning: data.similarityWarning,
     similarityBreakdown: data.similarityBreakdown,
+    similarityWithoutReferencesPercent: data.similarityWithoutReferencesPercent,
+    referenceCheck: data.referenceCheck,
     similarityStats: data.similarityStats,
     aiContent: data.aiContent,
     unavailableChecks: data.unavailableChecks,

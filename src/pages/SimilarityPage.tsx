@@ -7,6 +7,46 @@ import Meter from '../components/Meter'
 import CountUp from '../components/CountUp'
 import { useCurrentPaper } from '../hooks/useCurrentPaper'
 import { checkCrossReferences } from '../lib/crossReferences'
+import type { ReferenceCheck } from '../types'
+
+/** How much of the reference list also appears in other papers. Turnitin counts this unless
+ *  "exclude bibliography" is turned on, so users see it here before they submit. */
+function ReferenceListCard({ check }: { check: ReferenceCheck }) {
+  return (
+    <div className="ink-border card-pop mt-6 rounded-3xl bg-surface shadow-[var(--shadow-card)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b-[1.5px] border-line px-5 py-4">
+        <h2 className="font-display text-lg tracking-wide text-ink uppercase">Reference list</h2>
+        <span className="ink-border shrink-0 rounded-full bg-sticky-yellow px-2.5 py-1 text-xs font-bold text-ink-on-sticky">
+          {check.matchedEntries} of {check.entries} references match other papers
+        </span>
+      </div>
+      <div className="px-5 py-4 text-sm text-ink-2">
+        <p>
+          {check.percentOfReferences}% of your reference list&rsquo;s wording also appears in related papers. This is
+          normal: papers on the same topic cite the same work. Turnitin counts it in the similarity score unless your
+          instructor or journal turns on &ldquo;exclude bibliography&rdquo;, so the score above includes it and the
+          score without it is shown too.
+        </p>
+        {check.topSources.length > 0 && (
+          <div className="mt-3">
+            <p className="text-xs font-bold tracking-wide text-ink-muted uppercase">Most shared with</p>
+            <ul className="mt-1.5 space-y-1">
+              {check.topSources.map((s) => (
+                <li key={s.title}>
+                  <span className="font-bold">{s.title}</span> &middot; {s.entries} {s.entries === 1 ? 'reference' : 'references'}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-ink-muted">
+          Only the related papers this check found are compared, so Turnitin, with a larger database, may match more of
+          your references.
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export default function SimilarityPage() {
   const { paper } = useCurrentPaper()
@@ -79,7 +119,17 @@ export default function SimilarityPage() {
                 <span className="ink-border rounded-full bg-sticky-blue px-2.5 py-1">
                   {paper.similarityBreakdown.rewordedPercent}% reworded
                 </span>
+                {paper.similarityBreakdown.referencesPercent !== undefined && paper.referenceCheck && (
+                  <span className="ink-border rounded-full bg-sticky-yellow px-2.5 py-1">
+                    {paper.similarityBreakdown.referencesPercent}% reference list
+                  </span>
+                )}
               </div>
+            )}
+            {paper.referenceCheck && paper.similarityWithoutReferencesPercent !== undefined && (
+              <p className="mt-3 text-sm font-bold text-ink-2">
+                {paper.similarityWithoutReferencesPercent}% without the reference list
+              </p>
             )}
             <p className="mt-3 text-xs font-semibold text-ink-muted">
               Across {paper.similaritySources.length} matched {paper.similaritySources.length === 1 ? 'source' : 'sources'}
@@ -172,7 +222,8 @@ export default function SimilarityPage() {
           </div>
           {paper.analysisMode === 'ai' && (
             <p className="border-t-[1.5px] border-line px-5 py-3 text-xs text-ink-muted">
-              Reworded matches are confirmed by AI reading both passages side by side. Reference lists are not counted.
+              Reworded matches are confirmed by AI reading both passages side by side.{' '}
+              {paper.referenceCheck ? 'The reference list is counted, as Turnitin does by default.' : 'Reference lists are not counted.'}{' '}
               Full papers are compared when they are open access; for others, only the abstract. In our tests this
               caught most paragraphs copied word for word from published papers, but a single paragraph reworded from
               the body of a paper is usually missed, as are websites and other students&rsquo; work. Treat this as an
@@ -181,6 +232,10 @@ export default function SimilarityPage() {
           )}
         </div>
       </div>
+
+      {corpusChecked && paper.referenceCheck && paper.referenceCheck.entries > 0 && (
+        <ReferenceListCard check={paper.referenceCheck} />
+      )}
 
       <div className="ink-border card-pop mt-6 rounded-3xl bg-surface shadow-[var(--shadow-card)]">
         <div className="border-b-[1.5px] border-line px-5 py-4">

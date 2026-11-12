@@ -20,6 +20,7 @@ const C = {
   copied: '#9fc0f5',
   reworded: '#cfe0fb',
   source: '#b3cdf8',
+  reference: '#ddd0f2',
   good: '#1f7a4d',
   warn: '#9a5b00',
   bad: '#b3261e',
@@ -76,7 +77,7 @@ function highlightedRuns(section: AiContentSection, paper: Paper): Content[] {
   return runs
 }
 
-function legend(withSources: boolean): Content {
+function legend(withSources: boolean, withReferences = false): Content {
   const swatch = (color: string) => ({ width: 'auto' as const, canvas: [{ type: 'rect' as const, x: 0, y: 2, w: 10, h: 8, color }] })
   return {
     columns: [
@@ -84,7 +85,8 @@ function legend(withSources: boolean): Content {
       { width: 'auto', text: `Likely AI (${LIKELY_AI * 100}–${VERY_LIKELY_AI * 100}%)`, margin: [4, 0, 14, 0] },
       swatch(C.veryLikely),
       { width: 'auto', text: `Very likely AI (${VERY_LIKELY_AI * 100}%+)`, margin: [4, 0, 14, 0] },
-      ...(withSources ? [swatch(C.source), { width: 'auto' as const, text: 'Matches a source [no.]', margin: [4, 0, 0, 0] as [number, number, number, number] }] : []),
+      ...(withSources ? [swatch(C.source), { width: 'auto' as const, text: 'Matches a source [no.]', margin: [4, 0, 14, 0] as [number, number, number, number] }] : []),
+      ...(withReferences ? [swatch(C.reference), { width: 'auto' as const, text: 'Reference found in other papers', margin: [4, 0, 0, 0] as [number, number, number, number] }] : []),
     ],
     fontSize: 9,
     color: C.ink2,
@@ -139,10 +141,23 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
     const b = paper.similarityBreakdown
     summary.push(
       `${pct(paper.overallSimilarityPercent)} of the checked text matches published work${
-        b ? ` (${pct(b.copiedPercent)} word for word, ${pct(b.rewordedPercent)} reworded)` : ''
+        b
+          ? ` (${pct(b.copiedPercent)} word for word, ${pct(b.rewordedPercent)} reworded${
+              b.referencesPercent && paper.referenceCheck ? `, ${pct(b.referencesPercent)} reference list` : ''
+            })`
+          : ''
       }, across ${plural(sources.length, 'source')}.`,
     )
   }
+  const refs = paper.referenceCheck
+  if (corpusChecked && refs && refs.entries > 0)
+    summary.push(
+      `Reference list: ${refs.matchedEntries} of ${plural(refs.entries, 'reference')} match other papers (${pct(
+        refs.percentOfReferences,
+      )} of its wording). This is counted in the score, as Turnitin does by default; without it the score is ${pct(
+        paper.similarityWithoutReferencesPercent ?? 0,
+      )}.`,
+    )
   if (!aiChecked) summary.push('The AI-content check did not run for this paper.')
   else if (verdict) {
     const strongest = verdict.passages[0]
@@ -201,7 +216,11 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
         statBox(
           'Similarity',
           corpusChecked ? pct(paper.overallSimilarityPercent) : 'Not run',
-          corpusChecked ? `${plural(sources.length, 'matched source')}` : 'No score calculated',
+          corpusChecked
+            ? `${plural(sources.length, 'matched source')}${
+                refs && refs.entries > 0 ? ` · ${pct(paper.similarityWithoutReferencesPercent ?? 0)} without references` : ''
+              }`
+            : 'No score calculated',
           C.ink,
         ),
         statBox(
@@ -237,7 +256,9 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
     heading('How to read this report'),
     {
       ul: [
-        'Similarity: word-for-word matches are measured from shared 5-word sequences; reworded matches are confirmed by AI comparing both passages. Reference lists are not counted. Websites and other students’ work are not searched.',
+        `Similarity: word-for-word matches are measured from shared 5-word sequences; reworded matches are confirmed by AI comparing both passages. ${
+          paper.referenceCheck ? 'The reference list is counted, as Turnitin does by default; the score without it is also given.' : 'Reference lists are not counted.'
+        } Websites and other students’ work are not searched.`,
         'AI content: the detector scores each sentence. For papers, the verdict looks at passages where most sentences are flagged; for short texts (up to 40 sentences), at the share of flagged sentences. It is a statistical estimate, not proof of how the text was written.',
         'Detectors can flag human writing, especially formal, formulaic passages and text by non-native English writers. Review the highlighted passages rather than relying on a single number.',
       ],
@@ -356,7 +377,7 @@ export function buildReportDefinition(paper: Paper, meta: ReportMeta): TDocument
         color: C.ink2,
         margin: [0, 0, 0, 10],
       },
-      legend(hasSources),
+      legend(hasSources, corpusChecked && (paper.referenceCheck?.matchedEntries ?? 0) > 0),
     )
   }
 
@@ -412,6 +433,7 @@ function reportMarks(paper: Paper): Mark[] {
     }
   }
   // Sources last, so their blue sits on top where a passage is both.
+  for (const entry of paper.referenceCheck?.matchedExcerpts ?? []) marks.push({ text: entry, color: hex(C.reference) })
   ;(paper.similaritySources ?? []).forEach((src, i) => marks.push({ text: src.matchedExcerpt, color: hex(C.source), label: String(i + 1) }))
   return marks
 }

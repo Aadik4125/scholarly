@@ -994,7 +994,7 @@ async function compareAgainstFullTexts(chunks, candidateVotes, onSemanticError) 
   } catch (err) {
     onSemanticError(err)
   }
-  return { exact: matches, meaning, compared: sources.map((x) => x.candidate.title) }
+  return { exact: matches, meaning, compared: sources.map((x) => x.candidate.title), sources }
 }
 
 const JUDGE_BATCH = 15
@@ -1075,6 +1075,109 @@ function looksLikeReferences(text) {
   return (years >= 2 && numbered >= 2) || (years >= 3 && venues >= 2)
 }
 
+/** Splits a reference list into entries: at "[12]" or "12." markers when the list is numbered
+ *  (markers must count up, so "Vol. 3. In" isn't taken for entry 3), otherwise into ~30-word
+ *  pieces. */
+function splitReferenceEntries(text) {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  for (const marker of [/\[(\d{1,3})\]\s/g, /(?:^|\s)(\d{1,3})\.\s+(?=\p{Lu})/gu]) {
+    const cuts = []
+    let next = null
+    for (const m of clean.matchAll(marker)) {
+      const n = Number(m[1])
+      if (next === null ? n <= 2 : n === next) {
+        cuts.push(m.index)
+        next = n + 1
+      }
+    }
+    if (cuts.length >= 3) {
+      // Text before the first marker is a stray heading or page header, not an entry.
+      const entries = []
+      cuts.forEach((c, i) => entries.push(clean.slice(c, cuts[i + 1] ?? clean.length)))
+      return entries.map((e) => e.trim()).filter((e) => e.split(' ').length >= 4)
+    }
+  }
+  // Author-year lists (APA, Harvard): a new entry starts "Surname, A." after a full stop.
+  const authorYear = clean.split(/(?<=[.)]\s)(?=\p{Lu}[\p{L}'’-]+,\s\p{Lu})/u).map((e) => e.trim())
+  if (authorYear.length >= 3 && authorYear.filter((e) => /\b(19|20)\d{2}/.test(e)).length >= authorYear.length * 0.8) {
+    return authorYear.filter((e) => e.split(' ').length >= 4)
+  }
+  const words = clean.split(' ')
+  const pieces = []
+  for (let i = 0; i < words.length; i += 30) pieces.push(words.slice(i, i + 30).join(' '))
+  return pieces.filter((e) => e.split(' ').length >= 4)
+}
+
+/** Compares the paper's reference list with the full texts already fetched and with the titles
+ *  of every paper the searches found, the way Turnitin does unless "exclude bibliography" is on.
+ *  Papers on the same topic cite the same work, so matches here are expected, not copying.
+ *  An entry matches when 30% of its words are part of 5-word sequences found in a source, or of
+ *  a found paper's title; its matched words count toward the score. */
+function checkReferenceList(refText, sources, candidates) {
+  const entries = splitReferenceEntries(refText)
+  const titles = candidates
+    .map((c) => ({ candidate: c, tokens: shingleTokens(c.title) }))
+    .filter((t) => t.tokens.length >= 4)
+    .map((t) => ({ ...t, joined: ` ${t.tokens.join(' ')} ` }))
+  // 5-word sequences repeated across several of the paper's own entries are venue names
+  // ("proceedings of the ieee conference on..."). Any paper in the field shares them, so they
+  // don't by themselves make an entry a match; within a matched entry they count.
+  const seenIn = new Map()
+  for (const entry of entries) for (const sh of shingleSet(shingleTokens(entry))) seenIn.set(sh, (seenIn.get(sh) || 0) + 1)
+  const boilerplate = (sh) => (seenIn.get(sh) || 0) >= 3
+  let words = 0
+  let coveredWords = 0
+  let matchedEntries = 0
+  const perSource = new Map()
+  const matches = []
+  for (const entry of entries) {
+    const tokens = shingleTokens(entry)
+    words += tokens.length
+    if (tokens.length < SHINGLE_WORDS) continue
+    const covered = new Array(tokens.length).fill(null)
+    const specific = new Array(tokens.length).fill(null) // covered by a non-venue match
+    const mark = (from, to, title, isSpecific) => {
+      for (let i = from; i < to; i++) {
+        covered[i] ??= title
+        if (isSpecific) specific[i] ??= title
+      }
+    }
+    for (const source of sources) {
+      for (let i = 0; i + SHINGLE_WORDS <= tokens.length; i++) {
+        const sh = tokens.slice(i, i + SHINGLE_WORDS).join(' ')
+        if (source.shingles.has(sh)) mark(i, i + SHINGLE_WORDS, source.candidate.title, !boilerplate(sh))
+      }
+    }
+    const joined = ` ${tokens.join(' ')} `
+    for (const t of titles) {
+      const at = joined.indexOf(t.joined)
+      if (at < 0) continue
+      const start = joined.slice(0, at).trim().split(' ').filter(Boolean).length
+      mark(start, start + t.tokens.length, t.candidate.title, true)
+    }
+    const hits = specific.filter(Boolean)
+    if (hits.length / tokens.length < 0.3) continue
+    coveredWords += covered.filter(Boolean).length
+    matchedEntries += 1
+    const counts = new Map()
+    for (const title of hits) counts.set(title, (counts.get(title) || 0) + 1)
+    const top = [...counts].sort((a, b) => b[1] - a[1])[0][0]
+    perSource.set(top, (perSource.get(top) || 0) + 1)
+    if (matches.length < 80) matches.push(entry)
+  }
+  return {
+    words,
+    coveredWords,
+    result: {
+      entries: entries.length,
+      matchedEntries,
+      percentOfReferences: words ? Math.round((coveredWords / words) * 1000) / 10 : 0,
+      topSources: [...perSource].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([title, count]) => ({ title, entries: count })),
+      matchedExcerpts: matches,
+    },
+  }
+}
+
 async function checkExternalSimilarity(sections) {
   if (!openai) return { checked: false, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: null }
 
@@ -1086,16 +1189,29 @@ async function checkExternalSimilarity(sections) {
   const CONCURRENCY = 5
 
   const chunks = []
+  // The reference list is checked on its own (checkReferenceList), never as prose.
+  // Without a References heading, passages that read like a reference list stand in for it.
+  const refParts = []
+  const refLike = []
   for (const s of sections) {
-    if (AI_DETECT_SKIP_HEADING.test(s.heading)) continue // references, acknowledgements
+    if (REFERENCE_HEADING.test(s.heading)) {
+      refParts.push(s.text)
+      continue
+    }
+    if (AI_DETECT_SKIP_HEADING.test(s.heading)) continue // acknowledgements
     const words = s.text.split(/\s+/).filter(Boolean)
     for (let i = 0; i < words.length; i += CHUNK_WORDS) {
       const chunkWords = words.slice(i, i + CHUNK_WORDS)
-      if (chunkWords.length < 20 || looksLikeReferences(chunkWords.join(' '))) continue
+      if (looksLikeReferences(chunkWords.join(' '))) {
+        refLike.push(chunkWords.join(' '))
+        continue
+      }
+      if (chunkWords.length < 20) continue
       const phrases = [pickPhrase(chunkWords, 5, PHRASE_WORDS), pickPhrase(chunkWords, 35, PHRASE_WORDS)].filter(Boolean)
       chunks.push({ words: chunkWords, text: chunkWords.join(' '), phrases: [...new Set(phrases)] })
     }
   }
+  if (!refParts.length) refParts.push(...refLike)
   if (chunks.length === 0) return { checked: true, overallSimilarityPercent: 0, similaritySources: [], similarityWarning: null }
   const sampled = spreadEvenly(chunks, SEMANTIC_PASSAGES)
   const coreSampled = new Set(spreadEvenly(sampled, CORE_PASSAGES))
@@ -1223,8 +1339,9 @@ async function checkExternalSimilarity(sections) {
   let fullTextMatches = new Map()
   let meaningMatches = new Map()
   let comparedFullTexts = []
+  let fullTextSources = []
   try {
-    ;({ exact: fullTextMatches, meaning: meaningMatches, compared: comparedFullTexts } = await compareAgainstFullTexts(chunks, candidateVotes, (err) => fail('OpenAI', err)))
+    ;({ exact: fullTextMatches, meaning: meaningMatches, compared: comparedFullTexts, sources: fullTextSources } = await compareAgainstFullTexts(chunks, candidateVotes, (err) => fail('OpenAI', err)))
   } catch (err) {
     console.error('[server] full-text comparison failed, continuing without it:', err.message)
   }
@@ -1252,6 +1369,7 @@ async function checkExternalSimilarity(sections) {
 
   const matched = []
   let checkedChunks = 0
+  let checkedWords = 0
   for (const chunk of chunks) {
     const phraseChecked = chunk.phrases.some((p) => !phraseSearch.failedPhrases.has(p))
     const semantic = semanticByChunk.get(chunk)
@@ -1259,6 +1377,7 @@ async function checkExternalSimilarity(sections) {
     const meaning = meaningMatches.get(chunk)
     if (!phraseChecked && !semantic?.searched && !fullText && !meaning) continue
     checkedChunks += 1
+    checkedWords += chunk.words.length
     const rewording = reworded.get(chunk)
     if (fullText) {
       matched.push({
@@ -1327,14 +1446,27 @@ async function checkExternalSimilarity(sections) {
       bestPerSource.set(key, rank(m) > rank(current) ? { ...m, passageCount: count } : { ...current, passageCount: count })
     }
   }
-  const pct = (n) => (checkedChunks ? Math.round((n / checkedChunks) * 1000) / 10 : 0)
+  // Scores are shares of words. With a reference list, the headline includes it, as Turnitin
+  // does by default; the score without it is reported too, for instructors who exclude it.
+  const refs = refParts.length && checkedChunks
+    ? checkReferenceList(refParts.join(' '), fullTextSources, [...candidateVotes.values()].map((v) => v.candidate))
+    : null
+  const wordsOf = (m) => m.matchedExcerpt.split(/\s+/).filter(Boolean).length
+  const copiedWords = matched.filter((m) => m.matchType === 'fulltext').reduce((n, m) => n + wordsOf(m), 0)
+  const rewordedWords = matched.filter((m) => m.matchType === 'semantic').reduce((n, m) => n + wordsOf(m), 0)
+  const totalWords = checkedWords + (refs?.words ?? 0)
+  const share = (n, of) => (of ? Math.round((n / of) * 1000) / 10 : 0)
+  if (refs) console.log(`[server] reference list: ${refs.result.matchedEntries}/${refs.result.entries} entries matched, ${refs.result.percentOfReferences}% of its words`)
   return {
     checked: checkedChunks > 0,
-    overallSimilarityPercent: pct(matched.length),
+    overallSimilarityPercent: share(copiedWords + rewordedWords + (refs?.coveredWords ?? 0), totalWords),
+    similarityWithoutReferencesPercent: share(copiedWords + rewordedWords, checkedWords),
     similarityBreakdown: {
-      copiedPercent: pct(matched.filter((m) => m.matchType === 'fulltext').length),
-      rewordedPercent: pct(matched.filter((m) => m.matchType === 'semantic').length),
+      copiedPercent: share(copiedWords, totalWords),
+      rewordedPercent: share(rewordedWords, totalWords),
+      referencesPercent: share(refs?.coveredWords ?? 0, totalWords),
     },
+    referenceCheck: refs?.result ?? null,
     similaritySources: [...bestPerSource.values()].sort((a, b) => b.passageCount - a.passageCount || rank(b) - rank(a)).slice(0, 8),
     similarityWarning: warnings.length ? warnings.join(' ') : null,
     // What was actually checked, so a clean result can show its work rather than look like the
@@ -1679,6 +1811,8 @@ app.post('/api/analyze', usageGate, analyzePerIp, analyzeDaily, async (req, res)
       overallSimilarityPercent: externalSimilarity.overallSimilarityPercent,
       similaritySources: externalSimilarity.similaritySources,
       similarityBreakdown: externalSimilarity.similarityBreakdown,
+      similarityWithoutReferencesPercent: externalSimilarity.similarityWithoutReferencesPercent,
+      referenceCheck: externalSimilarity.referenceCheck,
       similarityStats: externalSimilarity.similarityStats,
       similarityWarning: externalSimilarity.similarityWarning,
       aiContent,

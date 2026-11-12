@@ -157,7 +157,13 @@ export interface Paper {
    *  score covers fewer passages than intended — or none. 'ai' mode only. */
   similarityWarning?: string | null
   /** The overall similarity split by kind of match. 'ai' mode only. */
-  similarityBreakdown?: { copiedPercent: number; rewordedPercent: number }
+  /** Shares of the whole checked text, reference list included; they add up to the overall
+   *  score. referencesPercent is absent on papers analysed before the reference list was checked. */
+  similarityBreakdown?: { copiedPercent: number; rewordedPercent: number; referencesPercent?: number }
+  /** The score with the reference list left out, like Turnitin's "exclude bibliography". */
+  similarityWithoutReferencesPercent?: number
+  /** The reference list compared with related papers. Shared references are normal. */
+  referenceCheck?: ReferenceCheck | null
   /** What the similarity check actually covered. 'ai' mode only. */
   similarityStats?: { passagesChecked: number; papersFound: number; fullTextsCompared: string[]; rewordingReviewed: number }
   /** AI-generated-text likelihood from the detector (Sapling). 'ai' mode only; absent on
@@ -166,4 +172,14 @@ export interface Paper {
   /** AI-reviewed checks that could not run on this paper (e.g. 'consistency', 'writing'), while
    *  the rest of the analysis did. 'ai' mode only. */
   unavailableChecks?: string[]
+}
+
+export interface ReferenceCheck {
+  entries: number
+  /** Entries with at least 30% of their wording found in another paper. */
+  matchedEntries: number
+  /** Share of the reference list's words found in other papers. */
+  percentOfReferences: number
+  topSources: { title: string; entries: number }[]
+  matchedExcerpts: string[]
 }
